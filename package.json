@@ -1,0 +1,38 @@
+{
+  "name": "@safecore/aip-mcp-unimed",
+  "version": "1.0.3",
+  "main": "dist/server.js",
+  "type": "module",
+  "bin": {
+    "resumo-salas": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/add-shebang.js",
+    "start": "node dist/server.js",
+    "dev": "node --loader ts-node/esm src/server.ts",
+    "inspector": "@modelcontextprotocol/inspector node dist/server.js",
+    "test": "NODE_OPTIONS=\"--loader ts-node/esm\" nodemon src/test.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Obter estatísticas resumidas sobre as limpezas de hoje.",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.5.0",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongodb": "^6.17.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "nodemon": "^3.1.9",
+    "prepend-file": "^2.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.2.2"
+  }
+}
