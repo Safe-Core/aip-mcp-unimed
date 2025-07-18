@@ -1,10 +1,10 @@
 {
   "name": "@safecore/aip-mcp-unimed",
-  "version": "1.0.3",
+  "version": "1.0.0",
   "main": "dist/server.js",
   "type": "module",
   "bin": {
-    "resumo-salas": "dist/server.js"
+    "unimed": "dist/server.js"
   },
   "scripts": {
     "build": "tsc && node scripts/add-shebang.js",

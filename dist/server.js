@@ -16,7 +16,7 @@ if (!MONGODB_URI) {
 const client = new MongoClient(MONGODB_URI);
 // Create an MCP server
 const server = new McpServer({
-    name: "resumo-salas",
+    name: "unimed",
     version: "1.0.0"
 });
 // Connect to MongoDB
