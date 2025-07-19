@@ -10,7 +10,8 @@
     "build": "tsc && node scripts/add-shebang.js",
     "start": "node dist/server.js",
     "dev": "node --loader ts-node/esm src/server.ts",
-    "inspector": "@modelcontextprotocol/inspector node dist/server.js",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/server.js",
+    "inspect:dev": "npx @modelcontextprotocol/inspector node --loader ts-node/esm src/server.ts",
     "test": "NODE_OPTIONS=\"--loader ts-node/esm\" nodemon src/test.ts"
   },
   "keywords": [],
