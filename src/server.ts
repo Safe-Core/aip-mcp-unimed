@@ -93,10 +93,10 @@ server.registerTool("resumo_geral",
 // Render a detailed table of room history
 function toHtmlTable(rows: any[]) {
   const headers = ['Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
-  
+
   const head = `
     <tr>
-      ${headers.map(h => `<th style="padding:8px;border:1px solid #ddd;background-color:#f5f5f5;text-align:left">${h}</th>`).join('')}
+      ${headers.map(h => `<th>${h}</th>`).join('')}
     </tr>
   `;
 
@@ -128,22 +128,20 @@ function toHtmlTable(rows: any[]) {
 
     return `
       <tr>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${timeCell}</td>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${suppliesCell}</td>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${observationsCell}</td>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${formattedDate}</td>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${createdBy}</td>
+        <td>${timeCell}</td>
+        <td>${suppliesCell}</td>
+        <td>${observationsCell}</td>
+        <td>${formattedDate}</td>
+        <td>${createdBy}</td>
       </tr>
     `;
   }).join('');
 
   return `
-    <div style="font-family: Arial, sans-serif; font-size: 14px;">
-      <table style="border-collapse: collapse; width: 100%;">
-        <thead>${head}</thead>
-        <tbody>${body}</tbody>
-      </table>
-    </div>
+    <table>
+      <thead>${head}</thead>
+      <tbody>${body}</tbody>
+    </table>
   `;
 }
 
@@ -166,14 +164,14 @@ server.registerTool(
     try {
       // Get all rooms from the database to validate
       const allRooms = await db.collection("items").distinct("name");
-      
+
       // Validate if the room exists in our list
-      const roomName = allRooms.find(r => 
-        r === sala || 
+      const roomName = allRooms.find(r =>
+        r === sala ||
         encodeURIComponent(r) === encodeURIComponent(sala) ||
         r.toLowerCase() === sala.toLowerCase()
       );
-      
+
       if (!roomName) {
         throw new Error(`Sala "${sala}" não encontrada`);
       }
@@ -193,15 +191,15 @@ server.registerTool(
 
         const startDate = parseDate(data_inicio as string) || new Date(0);
         const endDate = parseDate(data_fim as string) || new Date();
-        
+
         if (endDate) {
           endDate.setHours(23, 59, 59, 999);
         }
 
         history = history.filter(entry => {
           const entryDate = new Date(entry.date);
-          return (!startDate || entryDate >= startDate) && 
-                (!endDate || entryDate <= endDate);
+          return (!startDate || entryDate >= startDate) &&
+            (!endDate || entryDate <= endDate);
         });
       }
 
@@ -236,7 +234,7 @@ server.registerTool(
       };
     } catch (error) {
       console.error('Error in registros_completos_por_sala:', error);
-      return { 
+      return {
         content: [{
           type: "text",
           text: `Erro ao buscar registros: ${error.message}`

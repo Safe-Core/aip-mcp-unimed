@@ -76,7 +76,7 @@ function toHtmlTable(rows) {
     const headers = ['Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
     const head = `
     <tr>
-      ${headers.map(h => `<th style="padding:8px;border:1px solid #ddd;background-color:#f5f5f5;text-align:left">${h}</th>`).join('')}
+      ${headers.map(h => `<th>${h}</th>`).join('')}
     </tr>
   `;
     const body = rows.map(entry => {
@@ -103,21 +103,19 @@ function toHtmlTable(rows) {
         const createdBy = entry.usuarioEmail || 'N/A';
         return `
       <tr>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${timeCell}</td>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${suppliesCell}</td>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${observationsCell}</td>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${formattedDate}</td>
-        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${createdBy}</td>
+        <td>${timeCell}</td>
+        <td>${suppliesCell}</td>
+        <td>${observationsCell}</td>
+        <td>${formattedDate}</td>
+        <td>${createdBy}</td>
       </tr>
     `;
     }).join('');
     return `
-    <div style="font-family: Arial, sans-serif; font-size: 14px;">
-      <table style="border-collapse: collapse; width: 100%;">
-        <thead>${head}</thead>
-        <tbody>${body}</tbody>
-      </table>
-    </div>
+    <table>
+      <thead>${head}</thead>
+      <tbody>${body}</tbody>
+    </table>
   `;
 }
 // Tool to view all records for a specific room
