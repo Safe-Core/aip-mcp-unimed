@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
@@ -119,160 +120,86 @@ function toHtmlTable(rows) {
     </div>
   `;
 }
-const rooms = [
-    "SALA 28 (BANHEIRO)",
-    "SALA 27 (BANHEIRO)"
-];
-// Resource to view all records for a specific room
-// server.registerResource(
-//   "registros_completos_por_sala",
-//   new ResourceTemplate("unimed://registros_completos_por_sala/{sala}?data_inicio={data_inicio}&data_fim={data_fim}", {
-//     list: async () => ({
-//       resources: rooms.map(sala => {
-//         const encodedSala = encodeURIComponent(sala);
-//         return {
-//           name: sala,
-//           title: `Todos registros: ${sala}`,
-//           description: `Visualizar todos os registros da sala ${sala}`,
-//           uri: `unimed://registros_completos_por_sala/${encodedSala}`
-//         };
-//       })
-//     })
-//   }),
-//   {
-//     title: "Registros completos por sala",
-//     description: "Exibe todos os registros de uma sala em uma única tabela"
-//   },
-//   async (uri, { sala, data_inicio, data_fim, usuario }) => {
-//     try {
-//       if (!sala) {
-//         throw new Error('O parâmetro "sala" é obrigatório');
-//       }
-//       const roomParam = Array.isArray(sala) ? decodeURIComponent(sala[0]) : decodeURIComponent(sala);
-//       if (!rooms.includes(roomParam)) {
-//         throw new Error(`Sala "${roomParam}" não encontrada`);
-//       }
-//       const roomName = rooms.find(r => r === roomParam || encodeURIComponent(r) === encodeURIComponent(roomParam));
-//       if (!roomName) throw new Error("Sala inválida.");
-//       // Fetch room history
-//       const room = await db.collection("items").findOne({ name: roomName });
-//       let history = [...(room?.history || [])];
-//       // Filter by date if provided
-//       if (data_inicio || data_fim) {
-//         // Parse dates from dd/MM/yyyy format
-//         const parseDate = (dateStr: string) => {
-//           if (!dateStr) return null;
-//           // First decode URI component to handle %2F
-//           const decoded = decodeURIComponent(dateStr);
-//           const [day, month, year] = decoded.split('/').map(Number);
-//           return new Date(year, month - 1, day);
-//         };
-//         const startDate = data_inicio 
-//           ? parseDate(Array.isArray(data_inicio) ? data_inicio[0] : data_inicio)
-//           : new Date(0);
-//         let endDate = data_fim 
-//           ? parseDate(Array.isArray(data_fim) ? data_fim[0] : data_fim)
-//           : new Date();
-//         if (endDate) {
-//           endDate.setHours(23, 59, 59, 999);
-//         }
-//         history = history.filter(entry => {
-//           const entryDate = new Date(entry.date);
-//           return (!startDate || entryDate >= startDate) && 
-//                  (!endDate || entryDate <= endDate);
-//         });
-//       }
-//       // Sort by date descending
-//       history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-//       // Enrich with user email
-//       for (const entry of history) {
-//         if (entry.createdBy) {
-//           const u = await db.collection('users').findOne(
-//             { _id: entry.createdBy },
-//             { projection: { email: 1 } }
-//           );
-//           if (u) entry.usuarioEmail = u.email;
-//         }
-//       }
-//       const html = toHtmlTable(history);
-//       return { contents: [{ uri: uri.href, mimeType: "text/html", text: html }] };
-//     } catch (error) {
-//       return { contents: [{ uri: uri.href, text: `Erro: ${error.message}` }] };
-//     }
-//   }
-// );
-server.resource("registros_por_sala", "salas://registros_completos", {
-    title: "Registros de uma sala",
-    description: "Exibe todos os registros de uma sala",
-    mimeType: "text/html"
-}, async (uri) => {
-    const rows = [
-        { name: "SALA 28 (BANHEIRO)", date: new Date().toISOString() },
-        { name: "SALA 27 (BANHEIRO)", date: new Date().toISOString() },
-    ];
-    return {
-        contents: [{
-                uri: uri.href,
-                mimeType: "text/html",
-                text: `
-        <table>
-          <thead>
-            <tr>
-              <th>Sala</th>
-              <th>Data</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(row => `
-              <tr>
-                <td>${row.name}</td>
-                <td>${new Date(row.date).toLocaleString()}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `
-            }]
-    };
+// Tool to view all records for a specific room
+server.registerTool("registros_completos_por_sala", {
+    title: "Registros completos por sala",
+    description: "Exibe todos os registros de uma sala em uma única tabela",
+    inputSchema: {
+        sala: z.string().describe("Nome da sala (ex: SALA 28 (BANHEIRO))"),
+        data_inicio: z.string().describe("Data de início no formato DD/MM/YYYY").optional(),
+        data_fim: z.string().describe("Data de fim no formato DD/MM/YYYY").optional()
+    }
+}, async ({ sala, data_inicio, data_fim }) => {
+    if (!sala) {
+        throw new Error('O parâmetro "sala" é obrigatório');
+    }
+    try {
+        // Get all rooms from the database to validate
+        const allRooms = await db.collection("items").distinct("name");
+        // Validate if the room exists in our list
+        const roomName = allRooms.find(r => r === sala ||
+            encodeURIComponent(r) === encodeURIComponent(sala) ||
+            r.toLowerCase() === sala.toLowerCase());
+        if (!roomName) {
+            throw new Error(`Sala "${sala}" não encontrada`);
+        }
+        // Fetch room history
+        const room = await db.collection("items").findOne({ name: roomName });
+        let history = [...(room?.history || [])];
+        // Filter by date if provided
+        if (data_inicio || data_fim) {
+            // Parse dates from dd/MM/yyyy format
+            const parseDate = (dateStr) => {
+                if (!dateStr)
+                    return null;
+                const [day, month, year] = dateStr.split('/').map(Number);
+                return new Date(year, month - 1, day);
+            };
+            const startDate = parseDate(data_inicio) || new Date(0);
+            const endDate = parseDate(data_fim) || new Date();
+            if (endDate) {
+                endDate.setHours(23, 59, 59, 999);
+            }
+            history = history.filter(entry => {
+                const entryDate = new Date(entry.date);
+                return (!startDate || entryDate >= startDate) &&
+                    (!endDate || entryDate <= endDate);
+            });
+        }
+        // Sort by date descending
+        history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        // Enrich with user email
+        for (const entry of history) {
+            if (entry.createdBy) {
+                const user = await db.collection('users').findOne({ _id: entry.createdBy }, { projection: { email: 1 } });
+                if (user) {
+                    entry.usuarioEmail = user.email;
+                }
+            }
+        }
+        const table = toHtmlTable(history);
+        return {
+            content: [
+                {
+                    type: "resource",
+                    resource: {
+                        text: table,
+                        mimeType: "text/html"
+                    }
+                }
+            ]
+        };
+    }
+    catch (error) {
+        console.error('Error in registros_completos_por_sala:', error);
+        return {
+            content: [{
+                    type: "text",
+                    text: `Erro ao buscar registros: ${error.message}`
+                }]
+        };
+    }
 });
-// server.registerResource(
-//   "registros_completos_por_sala",
-//   new ResourceTemplate("unimed://registros_completos_por_sala/{sala}", {list: undefined}),
-//   {
-//     title: "Registros completos por sala",
-//     description: "Exibe todos os registros de uma sala em uma única tabela",
-//   mimeType: "text/html"
-//   }, async (uri) => {
-//     const rows = [
-//       { name: "SALA 28 (BANHEIRO)", date: new Date().toISOString() },
-//       { name: "SALA 27 (BANHEIRO)", date: new Date().toISOString() },
-//     ];
-//     return {
-//       contents: [{
-//         uri: uri.href,
-//         mimeType: "text/html",
-//         text: `
-//           <table>
-//             <thead>
-//               <tr>
-//                 <th>Sala</th>
-//                 <th>Data</th>
-//               </tr>
-//             </thead>
-//             <tbody>
-//               ${rows.map(row => `
-//                 <tr>
-//                   <td>${row.name}</td>
-//                   <td>${new Date(row.date).toLocaleString()}</td>
-//                 </tr>
-//               `).join('')}
-//             </tbody>
-//           </table>
-//         `
-//       }]
-//     }
-//   }
-// )
 // Handle shutdown gracefully
 process.on('SIGINT', async () => {
     try {
