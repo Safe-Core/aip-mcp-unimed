@@ -152,7 +152,7 @@ const rooms = [
 // Resource to view all records for a specific room
 server.registerResource(
   "registros_completos_por_sala",
-  new ResourceTemplate("unimed://registros_completos_por_sala/{sala}?data_inicio={data_inicio}&data_fim={data_fim}", {
+  new ResourceTemplate("unimed://registros_completos_por_sala/{nome_sala}?data_inicio={data_inicio}&data_fim={data_fim}", {
     list: async () => ({
       resources: rooms.map(sala => {
         const encodedSala = encodeURIComponent(sala);
@@ -163,13 +163,28 @@ server.registerResource(
           uri: `unimed://registros_completos_por_sala/${encodedSala}`
         };
       })
-    })
-  }),
+    }),
+    parameters: {
+      nome_sala: {
+        type: "string",
+        description: "Nome da sala (ex: SALA 28 (BANHEIRO))"
+      },
+      data_inicio: {
+        type: "string",
+        description: "Data de início no formato DD/MM/YYYY"
+      },
+      data_fim: {
+        type: "string",
+        description: "Data de fim no formato DD/MM/YYYY"
+      }
+    }
+  } as any),
   {
     title: "Registros completos por sala",
     description: "Exibe todos os registros de uma sala em uma única tabela"
   },
-  async (uri, { sala, data_inicio, data_fim, usuario }) => {
+  async (uri, { nome_sala, data_inicio, data_fim }) => {
+    const sala = nome_sala; // Alias for backward compatibility
     try {
       if (!sala) {
         throw new Error('O parâmetro "sala" é obrigatório');
