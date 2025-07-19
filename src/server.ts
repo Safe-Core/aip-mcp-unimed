@@ -26,10 +26,8 @@ const server = new McpServer({
   version: "1.0.0",
   capabilities: {
     tools: {
-      resumo_geral: {},
     },
     resources: {
-      registros_completos_por_sala: {},
     },
   },
 });
@@ -242,40 +240,44 @@ const rooms = [
 //   }
 // );
 
-server.resource("registros_sala", "unimed://registros_sala", {
-  title: "Registros de uma sala",
-  description: "Exibe todos os registros de uma sala",
-  mimeType: "text/html"
-}, async (uri) => {
-  const rows = [
-    { name: "SALA 28 (BANHEIRO)", date: new Date().toISOString() },
-    { name: "SALA 27 (BANHEIRO)", date: new Date().toISOString() },
-  ];
-  return {
-    contents: [{
-      uri: uri.href,
-      mimeType: "text/html",
-      text: `
-        <table>
-          <thead>
-            <tr>
-              <th>Sala</th>
-              <th>Data</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(row => `
+server.registerResource(
+  "registros_completos_por_sala",
+  new ResourceTemplate("registros_sala://{sala}", {list: undefined}),
+  {
+    title: "Registros completos por sala",
+    description: "Exibe todos os registros de uma sala em uma única tabela",
+    mimeType: "text/html"
+  }, async (uri, { sala }) => {
+    const rows = [
+      { name: "SALA 28 (BANHEIRO)", date: new Date().toISOString() },
+      { name: "SALA 27 (BANHEIRO)", date: new Date().toISOString() },
+    ];
+    return {
+      contents: [{
+        uri: uri.href,
+        mimeType: "text/html",
+        text: `
+          <table>
+            <thead>
               <tr>
-                <td>${row.name}</td>
-                <td>${new Date(row.date).toLocaleString()}</td>
+                <th>Sala</th>
+                <th>Data</th>
               </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `
-    }]
+            </thead>
+            <tbody>
+              ${rows.map(row => `
+                <tr>
+                  <td>${row.name} no Parametro ${sala}</td>
+                  <td>${new Date(row.date).toLocaleString()}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `
+      }]
+    }
   }
-})
+)
 
 // Handle shutdown gracefully
 process.on('SIGINT', async () => {
