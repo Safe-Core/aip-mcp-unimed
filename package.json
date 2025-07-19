@@ -1,6 +1,6 @@
 {
   "name": "@safecore/aip-mcp-unimed",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "main": "dist/server.js",
   "type": "module",
   "bin": {
