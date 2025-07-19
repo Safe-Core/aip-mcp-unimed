@@ -240,44 +240,79 @@ const rooms = [
 //   }
 // );
 
-server.registerResource(
-  "registros_completos_por_sala",
-  new ResourceTemplate("registros_sala://{sala}", {list: undefined}),
-  {
-    title: "Registros completos por sala",
-    description: "Exibe todos os registros de uma sala em uma única tabela",
-    mimeType: "text/html"
-  }, async (uri, { sala }) => {
-    const rows = [
-      { name: "SALA 28 (BANHEIRO)", date: new Date().toISOString() },
-      { name: "SALA 27 (BANHEIRO)", date: new Date().toISOString() },
-    ];
-    return {
-      contents: [{
-        uri: uri.href,
-        mimeType: "text/html",
-        text: `
-          <table>
-            <thead>
+server.resource("registros_por_sala", "salas://registros_completos", {
+  title: "Registros de uma sala",
+  description: "Exibe todos os registros de uma sala",
+  mimeType: "text/html"
+}, async (uri) => {
+  const rows = [
+    { name: "SALA 28 (BANHEIRO)", date: new Date().toISOString() },
+    { name: "SALA 27 (BANHEIRO)", date: new Date().toISOString() },
+  ];
+  return {
+    contents: [{
+      uri: uri.href,
+      mimeType: "text/html",
+      text: `
+        <table>
+          <thead>
+            <tr>
+              <th>Sala</th>
+              <th>Data</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => `
               <tr>
-                <th>Sala</th>
-                <th>Data</th>
+                <td>${row.name}</td>
+                <td>${new Date(row.date).toLocaleString()}</td>
               </tr>
-            </thead>
-            <tbody>
-              ${rows.map(row => `
-                <tr>
-                  <td>${row.name} no Parametro ${sala}</td>
-                  <td>${new Date(row.date).toLocaleString()}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        `
-      }]
-    }
+            `).join('')}
+          </tbody>
+        </table>
+      `
+    }]
   }
-)
+})
+
+// server.registerResource(
+//   "registros_completos_por_sala",
+//   new ResourceTemplate("unimed://registros_completos_por_sala/{sala}", {list: undefined}),
+//   {
+//     title: "Registros completos por sala",
+//     description: "Exibe todos os registros de uma sala em uma única tabela",
+//   mimeType: "text/html"
+//   }, async (uri) => {
+//     const rows = [
+//       { name: "SALA 28 (BANHEIRO)", date: new Date().toISOString() },
+//       { name: "SALA 27 (BANHEIRO)", date: new Date().toISOString() },
+//     ];
+//     return {
+//       contents: [{
+//         uri: uri.href,
+//         mimeType: "text/html",
+//         text: `
+//           <table>
+//             <thead>
+//               <tr>
+//                 <th>Sala</th>
+//                 <th>Data</th>
+//               </tr>
+//             </thead>
+//             <tbody>
+//               ${rows.map(row => `
+//                 <tr>
+//                   <td>${row.name}</td>
+//                   <td>${new Date(row.date).toLocaleString()}</td>
+//                 </tr>
+//               `).join('')}
+//             </tbody>
+//           </table>
+//         `
+//       }]
+//     }
+//   }
+// )
 
 // Handle shutdown gracefully
 process.on('SIGINT', async () => {
