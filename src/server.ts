@@ -6,9 +6,8 @@ import { z } from "zod";
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
-import { logger } from "mcp-framework";
 
-import { rooms } from "./salasList.ts";
+import { rooms } from "./roomList";
 
 // Load environment variables
 dotenv.config();

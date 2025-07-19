@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
-import { salas } from "./salasList";
+import { rooms } from "./roomList";
 // Load environment variables
 dotenv.config();
 // MongoDB connection
@@ -18,13 +18,15 @@ const client = new MongoClient(MONGODB_URI);
 // Create an MCP server
 const server = new McpServer({
     name: "unimed",
-    version: "1.0.0"
+    version: "1.0.0",
+    capabilities: {
+        logging: {},
+    },
 });
 // Connect to MongoDB
 let db;
 try {
     await client.connect();
-    console.log('Connected to MongoDB');
     db = client.db();
 }
 catch (error) {
@@ -32,7 +34,7 @@ catch (error) {
     process.exit(1);
 }
 // Summary statistics tool
-server.registerTool("obterResumo", {
+server.registerTool("resumo_geral", {
     title: "Resumo das salas",
     description: "Obter estatísticas resumidas sobre as limpezas de hoje",
     inputSchema: {}
@@ -68,128 +70,133 @@ server.registerTool("obterResumo", {
         return { content: [{ type: "text", text: 'Erro ao gerar resumo do dia' }] };
     }
 });
+// Render a detailed table of room history
 function toHtmlTable(rows) {
-    const header = ['Criado', 'Atualizado', 'Colaborador', 'Área'];
-    const head = header.map(h => `<th style="padding:4px;border:1px solid #ccc">${h}</th>`).join('');
-    const body = rows.map(r => `
+    const headers = ['Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
+    const head = `
     <tr>
-      <td style="padding:4px;border:1px solid #ccc">${r.createdAt}</td>
-      <td style="padding:4px;border:1px solid #ccc">${r.updatedAt}</td>
-      <td style="padding:4px;border:1px solid #ccc">${r.userEmail ?? '-'}</td>
-      <td style="padding:4px;border:1px solid #ccc">${r.areaType ?? '-'}</td>
+      ${headers.map(h => `<th style="padding:8px;border:1px solid #ddd;background-color:#f5f5f5;text-align:left">${h}</th>`).join('')}
     </tr>
-  `).join('');
-    return `<table style="border-collapse:collapse;width:100%;font-family:sans-serif">
-            <thead><tr>${head}</tr></thead>
-            <tbody>${body}</tbody>
-          </table>`;
+  `;
+    const body = rows.map(entry => {
+        const entryDate = new Date(entry.date);
+        const formattedDate = entryDate.toLocaleString('pt-BR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+        const timeCell = `
+      <div style="margin-bottom:4px">Início: ${entry.startTime || 'N/A'}</div>
+      <div>Fim: ${entry.endTime || 'N/A'}</div>
+    `;
+        const suppliesCell = `
+      <div>Papel Toalha: ${entry.paperTowel ? '✔' : '✖'}</div>
+      <div>Papel Higiênico: ${entry.toiletPaper ? '✔' : '✖'}</div>
+      <div>Sabão: ${entry.soap ? '✔' : '✖'}</div>
+      <div>Sanitizante: ${entry.handSanitizer ? '✔' : '✖'}</div>
+    `;
+        const observationsCell = entry.observations || 'Nenhuma observação';
+        const createdBy = entry.usuarioEmail || 'N/A';
+        return `
+      <tr>
+        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${timeCell}</td>
+        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${suppliesCell}</td>
+        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${observationsCell}</td>
+        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${formattedDate}</td>
+        <td style="padding:8px;border:1px solid #ddd;vertical-align:top">${createdBy}</td>
+      </tr>
+    `;
+    }).join('');
+    return `
+    <div style="font-family: Arial, sans-serif; font-size: 14px;">
+      <table style="border-collapse: collapse; width: 100%;">
+        <thead>${head}</thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+  `;
 }
-// Resource to get records for a specific room
-server.registerResource("obterRegistros", new ResourceTemplate("obterRegistros://{sala}?data_inicio={data_inicio}&data_fim={data_fim}", {
+// Resource to view all records for a specific room
+server.registerResource("registros_completos_por_sala", new ResourceTemplate("unimed://registros_completos_por_sala/{sala}?data_inicio={data_inicio}&data_fim={data_fim}", {
     list: async () => ({
-        resources: salas.map(sala => ({
-            name: sala,
-            title: `Registros de limpeza: ${sala}`,
-            description: `Registros da sala: ${sala}`,
-            uri: `obterRegistros://${sala}`
-        }))
+        resources: rooms.map(sala => {
+            const encodedSala = encodeURIComponent(sala);
+            return {
+                name: sala,
+                title: `Todos registros: ${sala}`,
+                description: `Visualizar todos os registros da sala ${sala}`,
+                uri: `unimed://registros_completos_por_sala/${encodedSala}`
+            };
+        })
     })
 }), {
-    title: "Registros de salas",
-    description: "Busca registros de limpeza de uma sala com intervalo de datas e paginação"
-}, async (uri, { sala, data_inicio, data_fim, page = '1', limit = '10', usuario }) => {
+    title: "Registros completos por sala",
+    description: "Exibe todos os registros de uma sala em uma única tabela"
+}, async (uri, { sala, data_inicio, data_fim, usuario }) => {
     try {
-        // Convert parameters to the correct types
-        const roomParam = Array.isArray(sala) ? sala[0] : sala;
-        const roomName = salas.includes(roomParam) ? roomParam : null;
+        if (!sala) {
+            throw new Error('O parâmetro "sala" é obrigatório');
+        }
+        const roomParam = Array.isArray(sala) ? decodeURIComponent(sala[0]) : decodeURIComponent(sala);
+        if (!rooms.includes(roomParam)) {
+            throw new Error(`Sala "${roomParam}" não encontrada`);
+        }
+        const roomName = rooms.find(r => r === roomParam || encodeURIComponent(r) === encodeURIComponent(roomParam));
         if (!roomName)
             throw new Error("Sala inválida.");
-        // Parse and validate pagination parameters
-        const pageNum = Math.max(1, parseInt(Array.isArray(page) ? page[0] : page) || 1);
-        const limitNum = Math.min(100, Math.max(1, parseInt(Array.isArray(limit) ? limit[0] : limit) || 10));
-        // Get the room data
+        // Fetch room history
         const room = await db.collection("items").findOne({ name: roomName });
-        if (!room) {
-            return {
-                registros: [],
-                paginacao: {
-                    total: 0,
-                    pagina: pageNum,
-                    itensPorPagina: limitNum,
-                    totalPaginas: 0
-                }
-            };
-        }
-        // Filter history by date range if provided
-        let filteredHistory = [...(room.history || [])];
+        let history = [...(room?.history || [])];
+        // Filter by date if provided
         if (data_inicio || data_fim) {
-            const startDate = data_inicio ? new Date(Array.isArray(data_inicio) ? data_inicio[0] : data_inicio) : new Date(0);
-            let endDate = data_fim ? new Date(Array.isArray(data_fim) ? data_fim[0] : data_fim) : new Date();
-            // Set end date to end of the day
-            if (data_fim) {
+            // Parse dates from dd/MM/yyyy format
+            const parseDate = (dateStr) => {
+                if (!dateStr)
+                    return null;
+                // First decode URI component to handle %2F
+                const decoded = decodeURIComponent(dateStr);
+                const [day, month, year] = decoded.split('/').map(Number);
+                return new Date(year, month - 1, day);
+            };
+            const startDate = data_inicio
+                ? parseDate(Array.isArray(data_inicio) ? data_inicio[0] : data_inicio)
+                : new Date(0);
+            let endDate = data_fim
+                ? parseDate(Array.isArray(data_fim) ? data_fim[0] : data_fim)
+                : new Date();
+            if (endDate) {
                 endDate.setHours(23, 59, 59, 999);
             }
-            filteredHistory = filteredHistory.filter(entry => {
+            history = history.filter(entry => {
                 const entryDate = new Date(entry.date);
-                return entryDate >= startDate && entryDate <= endDate;
+                return (!startDate || entryDate >= startDate) &&
+                    (!endDate || entryDate <= endDate);
             });
         }
-        // Sort history by date in descending order (newest first)
-        filteredHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        // Get total count before pagination
-        const totalEntries = filteredHistory.length;
-        // Apply pagination
-        const startIndex = (pageNum - 1) * limitNum;
-        const endIndex = pageNum * limitNum;
-        const paginatedHistory = filteredHistory.slice(startIndex, endIndex);
-        // Add user info to each history entry
-        for (const entry of paginatedHistory) {
+        // Sort by date descending
+        history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        // Enrich with user email
+        for (const entry of history) {
             if (entry.createdBy) {
-                const user = await db.collection('users').findOne({ _id: entry.createdBy }, { projection: { email: 1 } });
-                if (user) {
-                    entry.userEmail = user.email;
-                }
+                const u = await db.collection('users').findOne({ _id: entry.createdBy }, { projection: { email: 1 } });
+                if (u)
+                    entry.usuarioEmail = u.email;
             }
         }
-        // Format the response
-        const html = toHtmlTable(paginatedHistory);
-        return {
-            registros: paginatedHistory,
-            paginacao: {
-                total: totalEntries,
-                pagina: pageNum,
-                itensPorPagina: limitNum,
-                totalPaginas: Math.ceil(totalEntries / limitNum)
-            },
-            contents: [
-                {
-                    uri: `obterRegistros://${roomName}/${pageNum}`,
-                    mimeType: "text/html",
-                    text: html
-                }
-            ]
-        };
+        const html = toHtmlTable(history);
+        return { contents: [{ uri: uri.href, mimeType: "text/html", text: html }] };
     }
     catch (error) {
-        console.error('Error in obterRegistros:', error);
-        return {
-            registros: [],
-            paginacao: {
-                total: 0,
-                pagina: 1,
-                itensPorPagina: 10,
-                totalPaginas: 0
-            },
-            error: 'Erro ao buscar registros'
-        };
+        return { contents: [{ uri: uri.href, text: `Erro: ${error.message}` }] };
     }
 });
 // Handle shutdown gracefully
 process.on('SIGINT', async () => {
-    console.log('Shutting down...');
     try {
         await client.close();
-        console.log('MongoDB connection closed');
         process.exit(0);
     }
     catch (error) {
@@ -201,7 +208,6 @@ process.on('SIGINT', async () => {
 try {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.log('Server is running and connected to MongoDB');
 }
 catch (error) {
     console.error('Failed to start server:', error);
