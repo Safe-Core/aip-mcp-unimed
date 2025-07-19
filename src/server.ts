@@ -223,9 +223,9 @@ server.registerTool(
       return {
         content: [
           {
-            uri: `unimed://registros_completos_por_sala/${encodeURIComponent(sala)}`,
             type: "resource",
             resource: {
+              uri: `unimed://registros_completos_por_sala/${encodeURIComponent(sala)}`,
               text: table,
               mimeType: "text/html"
             }
