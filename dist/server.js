@@ -4,7 +4,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
-import { rooms } from "./roomList";
 // Load environment variables
 dotenv.config();
 // MongoDB connection
@@ -119,6 +118,10 @@ function toHtmlTable(rows) {
     </div>
   `;
 }
+const rooms = [
+    "SALA 28 (BANHEIRO)",
+    "SALA 27 (BANHEIRO)"
+];
 // Resource to view all records for a specific room
 server.registerResource("registros_completos_por_sala", new ResourceTemplate("unimed://registros_completos_por_sala/{sala}?data_inicio={data_inicio}&data_fim={data_fim}", {
     list: async () => ({

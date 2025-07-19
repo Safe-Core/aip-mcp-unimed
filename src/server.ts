@@ -7,8 +7,6 @@ import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
 
-import { rooms } from "./roomList";
-
 // Load environment variables
 dotenv.config();
 
@@ -145,6 +143,11 @@ function toHtmlTable(rows: any[]) {
     </div>
   `;
 }
+
+const rooms = [
+  "SALA 28 (BANHEIRO)",
+  "SALA 27 (BANHEIRO)"
+];
 
 // Resource to view all records for a specific room
 server.registerResource(
