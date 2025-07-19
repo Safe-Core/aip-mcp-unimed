@@ -149,7 +149,7 @@ function toHtmlTable(rows: any[]) {
 
 // Tool to view all records for a specific room
 server.registerTool(
-  "registros_completos_por_sala",
+  "limpezas_feitas",
   {
     title: "Registros completos por sala",
     description: "Exibe todos os registros de uma sala em uma única tabela",
@@ -225,6 +225,7 @@ server.registerTool(
       return {
         content: [
           {
+            uri: `unimed://registros_completos_por_sala/${encodeURIComponent(sala)}`,
             type: "resource",
             resource: {
               text: table,
