@@ -176,16 +176,18 @@ server.registerTool("limpezas_feitas", {
             }
         }
         const table = toHtmlTable(history);
+        const artifact = `
+        :::artifact{identifier="registros-${encodeURIComponent(sala)}"
+                    type="text/html"
+                    title="Registros completos – ${sala}"}
+        \`\`\`
+        ${table}
+        \`\`\`
+        :::
+        `.trim();
         return {
             content: [
-                {
-                    type: "resource",
-                    resource: {
-                        uri: `unimed://registros_completos_por_sala/${encodeURIComponent(sala)}`,
-                        text: table,
-                        mimeType: "text/html"
-                    }
-                }
+                { type: "text", text: artifact }
             ]
         };
     }
