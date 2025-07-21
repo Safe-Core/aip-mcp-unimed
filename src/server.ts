@@ -6,6 +6,7 @@ import { z } from "zod";
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
+import "mcps-logger/console";
 
 // Load environment variables
 dotenv.config();
@@ -92,7 +93,7 @@ server.registerTool("resumo_geral",
 
 // Render a detailed table of room history
 function toHtmlTable(rows: any[]) {
-  const headers = ['Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
+  const headers = ['Sala', 'Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
 
   const head = `
     <tr>
@@ -126,8 +127,11 @@ function toHtmlTable(rows: any[]) {
     const observationsCell = entry.observations || 'Nenhuma observação';
     const createdBy = entry.usuarioEmail || 'N/A';
 
+    const roomName = entry.name || 'N/A';
+    
     return `
       <tr>
+        <td>${roomName}</td>
         <td>${timeCell}</td>
         <td>${suppliesCell}</td>
         <td>${observationsCell}</td>
@@ -162,23 +166,53 @@ server.registerTool(
       throw new Error('O parâmetro "sala" é obrigatório');
     }
     try {
-      // Get all rooms from the database to validate
-      const allRooms = await db.collection("items").distinct("name");
+      // Use Atlas Search to find the best matching room name with fuzzy search
+      const searchResults = await db.collection("items").aggregate([
+        {
+          $search: {
+            index: "default_1",
+            text: {
+              query: sala,
+              path: "name"
+            },
+            scoreDetails: true
+          }
+        },
+        {
+          $project: {
+            qrCode: 0,
+            score: { $meta: "searchScore" },
+          }
+        },
+        { $limit: 3 }
+      ]).toArray();
+      searchResults.map((r: any) => {
+        console.error("room", r);
+      })
 
-      // Validate if the room exists in our list
-      const roomName = allRooms.find(r =>
-        r === sala ||
-        encodeURIComponent(r) === encodeURIComponent(sala) ||
-        r.toLowerCase() === sala.toLowerCase()
+      // Filter results with a minimum score to ensure relevance
+      const MIN_SCORE = 0.7; // Threshold of 70%
+      const validResults = searchResults.filter((result: any) => 
+        result.score >= MIN_SCORE
       );
 
-      if (!roomName) {
-        throw new Error(`Sala "${sala}" não encontrada`);
+      if (validResults.length === 0) {
+        throw new Error(`Nenhuma sala encontrada que corresponda a "${sala}". Por favor, verifique o nome e tente novamente.`);
       }
 
-      // Fetch room history
-      const room = await db.collection("items").findOne({ name: roomName });
-      let history = [...(room?.history || [])];
+      // Get the best match
+      const bestMatch = validResults[0];
+      const roomName = bestMatch.name;
+      
+      // Filter history to only include entries from the last 12 hours if no date range is specified
+      const twelveHoursAgo = new Date();
+      twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
+      
+      let history = [...(bestMatch.history || [])]
+        .filter(entry => {
+          const entryDate = new Date(entry.timestamp);
+          return (!data_inicio && !data_fim) ? entryDate >= twelveHoursAgo : true;
+        });
 
       // Filter by date if provided
       if (data_inicio || data_fim) {

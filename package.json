@@ -12,6 +12,7 @@
     "dev": "node --loader ts-node/esm src/server.ts",
     "inspect": "npx @modelcontextprotocol/inspector node dist/server.js",
     "inspect:dev": "npx @modelcontextprotocol/inspector node --loader ts-node/esm src/server.ts",
+    "logs": "npx mcps-logger",
     "test": "NODE_OPTIONS=\"--loader ts-node/esm\" nodemon src/test.ts"
   },
   "keywords": [],
@@ -26,6 +27,7 @@
     "date-fns": "^4.1.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "mcps-logger": "^1.0.0",
     "mongodb": "^6.17.0",
     "zod": "^3.22.4"
   },
