@@ -6,7 +6,7 @@ import { z } from "zod";
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
-import "mcps-logger/console";
+// import "mcps-logger/console";
 
 // Load environment variables
 dotenv.config();
@@ -126,8 +126,7 @@ function toHtmlTable(rows: any[]) {
 
     const observationsCell = entry.observations || 'Nenhuma observação';
     const createdBy = entry.usuarioEmail || 'N/A';
-
-    const roomName = entry.name || 'N/A';
+    const roomName = entry.roomName || entry.name || 'N/A';
     
     return `
       <tr>
@@ -186,9 +185,6 @@ server.registerTool(
         },
         { $limit: 3 }
       ]).toArray();
-      searchResults.map((r: any) => {
-        console.error("room", r);
-      })
 
       // Filter results with a minimum score to ensure relevance
       const MIN_SCORE = 0.7; // Threshold of 70%
@@ -200,19 +196,28 @@ server.registerTool(
         throw new Error(`Nenhuma sala encontrada que corresponda a "${sala}". Por favor, verifique o nome e tente novamente.`);
       }
 
-      // Get the best match
-      const bestMatch = validResults[0];
-      const roomName = bestMatch.name;
-      
-      // Filter history to only include entries from the last 12 hours if no date range is specified
+      // Get all valid matches and their history
       const twelveHoursAgo = new Date();
       twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
       
-      let history = [...(bestMatch.history || [])]
-        .filter(entry => {
-          const entryDate = new Date(entry.timestamp);
-          return (!data_inicio && !data_fim) ? entryDate >= twelveHoursAgo : true;
-        });
+      // Combine history from all valid results
+      let combinedHistory: any[] = [];
+      
+      for (const result of validResults) {
+        const roomHistory = [...(result.history || [])]
+          .filter(entry => {
+            const entryDate = new Date(entry.timestamp);
+            // Add room name to each history entry for reference
+            entry.roomName = result.name;
+            return (!data_inicio && !data_fim) ? entryDate >= twelveHoursAgo : true;
+          });
+        combinedHistory = [...combinedHistory, ...roomHistory];
+      }
+      
+      // Sort by date descending (newest first)
+      combinedHistory.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      let history = combinedHistory;
 
       // Filter by date if provided
       if (data_inicio || data_fim) {
@@ -240,7 +245,7 @@ server.registerTool(
       // Sort by date descending
       history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-      // Enrich with user email
+      // Enrich with user email and room name
       for (const entry of history) {
         if (entry.createdBy) {
           const user = await db.collection('users').findOne(
@@ -251,6 +256,7 @@ server.registerTool(
             entry.usuarioEmail = user.email;
           }
         }
+        // Room name is already added during the history combination phase
       }
 
       const table = toHtmlTable(history);
