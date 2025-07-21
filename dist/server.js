@@ -35,6 +35,46 @@ catch (error) {
     console.error('Error connecting to MongoDB:', error);
     process.exit(1);
 }
+// Tool to list all rooms without qrCode field
+server.registerTool("listar_salas", {
+    title: "Listar todas as salas",
+    description: "Retorna uma lista de todas as salas cadastradas, sem o campo qrCode",
+    inputSchema: {}
+}, async () => {
+    try {
+        const rooms = await db.collection("items").find({}, { projection: { qrCode: 0 } } // Remove qrCode field
+        ).toArray();
+        // Group rooms by category (using text between parentheses as category)
+        const roomsByCategory = {};
+        rooms.forEach((room) => {
+            const match = room.name.match(/(.*?)(?:\((.*?)\))?$/);
+            const nameBase = (match?.[1] || room.name).trim();
+            const category = match?.[2] || 'Outros';
+            if (!roomsByCategory[category]) {
+                roomsByCategory[category] = [];
+            }
+            roomsByCategory[category].push(nameBase);
+        });
+        // Create a summary string
+        let output = `Total de salas: ${rooms.length}\n\n`;
+        for (const [category, names] of Object.entries(roomsByCategory)) {
+            const uniqueNames = [...new Set(names)]; // Remove duplicates
+            output += `\n${category} (${uniqueNames.length}): ${uniqueNames.join(', ')}`;
+        }
+        return {
+            content: [{ type: "text", text: output }]
+        };
+    }
+    catch (error) {
+        console.error('Error fetching rooms:', error);
+        return {
+            content: [{
+                    type: "text",
+                    text: `Erro ao buscar salas: ${error.message}`
+                }]
+        };
+    }
+});
 // Summary statistics tool
 server.registerTool("resumo_geral", {
     title: "Resumo das salas",
