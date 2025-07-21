@@ -5,7 +5,7 @@ import { z } from "zod";
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
-import "mcps-logger/console";
+// import "mcps-logger/console";
 // Load environment variables
 dotenv.config();
 // MongoDB connection
