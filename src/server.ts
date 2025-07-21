@@ -6,7 +6,7 @@ import { z } from "zod";
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
-// import "mcps-logger/console";
+import "mcps-logger/console";
 
 // Load environment variables
 dotenv.config();
@@ -179,7 +179,9 @@ server.registerTool(
         },
         {
           $project: {
-            qrCode: 0,
+            _id: 1,
+            name: 1,
+            history: 1,
             score: { $meta: "searchScore" },
           }
         },
