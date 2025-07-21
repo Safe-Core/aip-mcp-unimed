@@ -5,6 +5,7 @@ import { z } from "zod";
 import { startOfToday, endOfToday, previousDay } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
+import "mcps-logger/console";
 // Load environment variables
 dotenv.config();
 // MongoDB connection
@@ -73,7 +74,7 @@ server.registerTool("resumo_geral", {
 });
 // Render a detailed table of room history
 function toHtmlTable(rows) {
-    const headers = ['Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
+    const headers = ['Sala', 'Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
     const head = `
     <tr>
       ${headers.map(h => `<th>${h}</th>`).join('')}
@@ -101,8 +102,10 @@ function toHtmlTable(rows) {
     `;
         const observationsCell = entry.observations || 'Nenhuma observação';
         const createdBy = entry.usuarioEmail || 'N/A';
+        const roomName = entry.roomName || entry.name || 'N/A';
         return `
       <tr>
+        <td>${roomName}</td>
         <td>${timeCell}</td>
         <td>${suppliesCell}</td>
         <td>${observationsCell}</td>
@@ -132,18 +135,52 @@ server.registerTool("limpezas_feitas", {
         throw new Error('O parâmetro "sala" é obrigatório');
     }
     try {
-        // Get all rooms from the database to validate
-        const allRooms = await db.collection("items").distinct("name");
-        // Validate if the room exists in our list
-        const roomName = allRooms.find(r => r === sala ||
-            encodeURIComponent(r) === encodeURIComponent(sala) ||
-            r.toLowerCase() === sala.toLowerCase());
-        if (!roomName) {
-            throw new Error(`Sala "${sala}" não encontrada`);
+        // Use Atlas Search to find the best matching room name with fuzzy search
+        const searchResults = await db.collection("items").aggregate([
+            {
+                $search: {
+                    index: "default_1",
+                    text: {
+                        query: sala,
+                        path: "name"
+                    },
+                    scoreDetails: true
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    name: 1,
+                    history: 1,
+                    score: { $meta: "searchScore" },
+                }
+            },
+            { $limit: 3 }
+        ]).toArray();
+        // Filter results with a minimum score to ensure relevance
+        const MIN_SCORE = 0.7; // Threshold of 70%
+        const validResults = searchResults.filter((result) => result.score >= MIN_SCORE);
+        if (validResults.length === 0) {
+            throw new Error(`Nenhuma sala encontrada que corresponda a "${sala}". Por favor, verifique o nome e tente novamente.`);
         }
-        // Fetch room history
-        const room = await db.collection("items").findOne({ name: roomName });
-        let history = [...(room?.history || [])];
+        // Get all valid matches and their history
+        const twelveHoursAgo = new Date();
+        twelveHoursAgo.setHours(twelveHoursAgo.getHours() - 12);
+        // Combine history from all valid results
+        let combinedHistory = [];
+        for (const result of validResults) {
+            const roomHistory = [...(result.history || [])]
+                .filter(entry => {
+                const entryDate = new Date(entry.timestamp);
+                // Add room name to each history entry for reference
+                entry.roomName = result.name;
+                return (!data_inicio && !data_fim) ? entryDate >= twelveHoursAgo : true;
+            });
+            combinedHistory = [...combinedHistory, ...roomHistory];
+        }
+        // Sort by date descending (newest first)
+        combinedHistory.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        let history = combinedHistory;
         // Filter by date if provided
         if (data_inicio || data_fim) {
             // Parse dates from dd/MM/yyyy format
@@ -166,7 +203,7 @@ server.registerTool("limpezas_feitas", {
         }
         // Sort by date descending
         history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        // Enrich with user email
+        // Enrich with user email and room name
         for (const entry of history) {
             if (entry.createdBy) {
                 const user = await db.collection('users').findOne({ _id: entry.createdBy }, { projection: { email: 1 } });
@@ -174,6 +211,7 @@ server.registerTool("limpezas_feitas", {
                     entry.usuarioEmail = user.email;
                 }
             }
+            // Room name is already added during the history combination phase
         }
         const table = toHtmlTable(history);
         const artifact = `
