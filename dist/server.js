@@ -279,6 +279,142 @@ server.registerTool("limpezas_feitas", {
         };
     }
 });
+// Tool to fetch cleaning photos with entry and exit times
+server.registerTool("buscar_fotos", {
+    title: "Buscar Fotos da Limpeza",
+    description: "Busca as fotos de entrada e saída da limpeza de uma sala",
+    inputSchema: {
+        sala: z.string().describe("Nome da sala (ex: SALA 28 (BANHEIRO))"),
+        data_inicio: z.string().describe("Data de início no formato DD/MM/YYYY").optional(),
+        data_fim: z.string().describe("Data de fim no formato DD/MM/YYYY").optional()
+    }
+}, async ({ sala, data_inicio, data_fim }) => {
+    try {
+        if (!sala) {
+            throw new Error('O parâmetro "sala" é obrigatório');
+        }
+        // Helper function to parse dates from DD/MM/YYYY format
+        const parseDate = (dateStr) => {
+            if (!dateStr)
+                return null;
+            const [day, month, year] = dateStr.split('/').map(Number);
+            return new Date(year, month - 1, day);
+        };
+        // Use Atlas Search to find the best matching room name with fuzzy search
+        const searchResults = await db.collection("items").aggregate([
+            {
+                $search: {
+                    index: "default_1",
+                    text: {
+                        query: sala,
+                        path: "name"
+                    },
+                    scoreDetails: true
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    name: 1,
+                    history: 1,
+                    score: { $meta: "searchScore" },
+                }
+            },
+            { $limit: 3 } // Limit to top 3 results
+        ]).toArray();
+        // Filter results with a minimum score to ensure relevance
+        const MIN_SCORE = 0.7; // Threshold of 70%
+        const validResults = searchResults.filter((result) => result.score >= MIN_SCORE);
+        if (validResults.length === 0) {
+            throw new Error(`Nenhuma sala encontrada que corresponda a "${sala}". Por favor, verifique o nome e tente novamente.`);
+        }
+        // Parse date range or default to today
+        const startDate = data_inicio ? parseDate(data_inicio) : new Date();
+        if (startDate)
+            startDate.setHours(0, 0, 0, 0);
+        const endDate = data_fim ? parseDate(data_fim) : new Date();
+        if (endDate)
+            endDate.setHours(23, 59, 59, 999);
+        const filterByDate = Boolean(data_inicio || data_fim);
+        // Process each valid result
+        const results = [];
+        for (const result of validResults) {
+            // Find history entries within date range
+            const filteredEntries = (result.history || []).filter((entry) => {
+                if (!entry.date)
+                    return false;
+                const entryDate = new Date(entry.date);
+                const isAfterStart = !startDate || entryDate >= startDate;
+                const isBeforeEnd = !endDate || entryDate <= endDate;
+                return isAfterStart && isBeforeEnd;
+            });
+            if (filteredEntries.length === 0)
+                continue;
+            // Sort by date descending (newest first)
+            filteredEntries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            // Get the most recent entry if available
+            const latestEntry = filteredEntries[0];
+            if (!latestEntry)
+                continue;
+            // Get RESELLER_API from environment
+            const apiBaseUrl = process.env.RESELLER_API;
+            if (!apiBaseUrl) {
+                throw new Error('RESELLER_API não está configurado no ambiente');
+            }
+            // Create photo URLs
+            const photos = {};
+            if (latestEntry.startedPhoto) {
+                photos.entrada = `${apiBaseUrl}/bin/uploads/${latestEntry.startedPhoto}`;
+            }
+            if (latestEntry.finishedPhoto) {
+                photos.saida = `${apiBaseUrl}/bin/uploads/${latestEntry.finishedPhoto}`;
+            }
+            if (Object.keys(photos).length > 0) {
+                results.push({
+                    sala: result.name,
+                    data: latestEntry.date,
+                    fotos: photos
+                });
+            }
+        }
+        if (results.length === 0) {
+            const dateRangeText = filterByDate
+                ? `no período de ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}`
+                : `para hoje (${new Date().toLocaleDateString('pt-BR')})`;
+            return {
+                content: [{
+                        type: "text",
+                        text: `Nenhuma foto de limpeza encontrada ${dateRangeText}`
+                    }]
+            };
+        }
+        // Format the response
+        const dateRangeText = filterByDate
+            ? `no período de ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}`
+            : `para hoje (${new Date().toLocaleDateString('pt-BR')})`;
+        const formattedResults = results.map(result => `Sala: ${result.sala}\n` +
+            `Data: ${new Date(result.data).toLocaleString('pt-BR')}\n` +
+            'Fotos:\n' +
+            (result.fotos.entrada ? `- Entrada: ${result.fotos.entrada}\n` : '') +
+            (result.fotos.saida ? `- Saída: ${result.fotos.saida}\n` : '') +
+            'A busca retorna apenas os registros mais recentes para os dias selecionados. Se estiver procurando algo específico, indique o dia e horário desejado.').join('\n---\n');
+        return {
+            content: [{
+                    type: "text",
+                    text: `Fotos de limpeza encontradas ${dateRangeText}:\n\n${formattedResults}`
+                }]
+        };
+    }
+    catch (error) {
+        console.error('Error in buscar_fotos_limpeza:', error);
+        return {
+            content: [{
+                    type: "text",
+                    text: `Erro ao buscar fotos de limpeza: ${error.message}`
+                }]
+        };
+    }
+});
 // Handle shutdown gracefully
 process.on('SIGINT', async () => {
     try {
