@@ -1,5 +1,5 @@
 import { Storage } from '@google-cloud/storage';
-import { gcsConfig, validateGcsConfig } from '../config/gcs.config';
+import { gcsConfig, validateGcsConfig } from '../config/gcs.config.js';
 import * as path from 'path';
 import * as crypto from 'crypto';
 export class StorageService {

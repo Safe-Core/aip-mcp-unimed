@@ -10,7 +10,9 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { z } from 'zod';
-import { storageService } from './services/storage.service';
+import { StorageService } from './services/storage.service.js';
+// Create storage service instance
+const storageService = new StorageService();
 // import "mcps-logger/console";
 // Get directory name in ES module
 const __filename = fileURLToPath(import.meta.url);
@@ -56,9 +58,7 @@ server.registerTool("listar_salas", {
     inputSchema: {}
 }, async () => {
     try {
-        const rooms = await db.collection("items").find({}, { projection: { qrCode: 0 } } // Remove qrCode field
-        ).toArray();
-        // Group rooms by category (using text between parentheses as category)
+        const rooms = await db.collection("items").find({}, { projection: { qrCode: 0 } }).toArray();
         const roomsByCategory = {};
         rooms.forEach((room) => {
             const match = room.name.match(/(.*?)(?:\((.*?)\))?$/);
@@ -69,10 +69,9 @@ server.registerTool("listar_salas", {
             }
             roomsByCategory[category].push(nameBase);
         });
-        // Create a summary string
         let output = `Total de salas: ${rooms.length}\n\n`;
         for (const [category, names] of Object.entries(roomsByCategory)) {
-            const uniqueNames = [...new Set(names)]; // Remove duplicates
+            const uniqueNames = [...new Set(names)];
             output += `\n${category} (${uniqueNames.length}): ${uniqueNames.join(', ')}`;
         }
         return {
@@ -80,13 +79,18 @@ server.registerTool("listar_salas", {
         };
     }
     catch (error) {
-        console.error('Error fetching rooms:', error);
-        return {
-            content: [{
-                    type: "text",
-                    text: `Erro ao buscar salas: ${error.message}`
-                }]
-        };
+        if (error instanceof Error) {
+            console.error('Error fetching rooms:', error);
+            return {
+                content: [{ type: "text", text: `Erro ao buscar salas: ${error.message}` }]
+            };
+        }
+        else {
+            console.error('Error fetching rooms:', error);
+            return {
+                content: [{ type: "text", text: `Erro ao buscar salas: erro desconhecido` }]
+            };
+        }
     }
 });
 // Tool to fetch summary statistics
@@ -109,7 +113,7 @@ server.registerTool("resumo_geral", {
         for (const item of items) {
             totalRooms++;
             // Check if item has any records today
-            const hasRecordToday = item.history.some(record => {
+            const hasRecordToday = item.history.some((record) => {
                 const recordDate = new Date(record.date);
                 return recordDate >= todayStart && recordDate <= todayEnd;
             });
@@ -240,7 +244,7 @@ server.registerTool("limpezas_feitas", {
             // Parse dates from dd/MM/yyyy format
             const parseDate = (dateStr) => {
                 if (!dateStr)
-                    return null;
+                    return undefined;
                 const [day, month, year] = dateStr.split('/').map(Number);
                 return new Date(year, month - 1, day);
             };
@@ -251,8 +255,7 @@ server.registerTool("limpezas_feitas", {
             }
             history = history.filter(entry => {
                 const entryDate = new Date(entry.date);
-                return (!startDate || entryDate >= startDate) &&
-                    (!endDate || entryDate <= endDate);
+                return (!startDate || entryDate >= startDate) && (!endDate || entryDate <= endDate);
             });
         }
         // Sort by date descending
@@ -284,13 +287,18 @@ server.registerTool("limpezas_feitas", {
         };
     }
     catch (error) {
-        console.error('Error in registros_completos_por_sala:', error);
-        return {
-            content: [{
-                    type: "text",
-                    text: `Erro ao buscar registros: ${error.message}`
-                }]
-        };
+        if (error instanceof Error) {
+            console.error('Error in registros_completos_por_sala:', error);
+            return {
+                content: [{ type: "text", text: `Erro ao buscar registros: ${error.message}` }]
+            };
+        }
+        else {
+            console.error('Error in registros_completos_por_sala:', error);
+            return {
+                content: [{ type: "text", text: `Erro ao buscar registros: erro desconhecido` }]
+            };
+        }
     }
 });
 // Tool to fetch cleaning photos with entry and exit times
@@ -393,7 +401,7 @@ server.registerTool("buscar_fotos", {
         }
         if (results.length === 0) {
             const dateRangeText = filterByDate
-                ? `no período de ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}`
+                ? `no período de ${(startDate ? startDate.toLocaleDateString('pt-BR') : '')} a ${(endDate ? endDate.toLocaleDateString('pt-BR') : '')}`
                 : `para hoje (${new Date().toLocaleDateString('pt-BR')})`;
             return {
                 content: [{
@@ -404,7 +412,7 @@ server.registerTool("buscar_fotos", {
         }
         // Format the response
         const dateRangeText = filterByDate
-            ? `no período de ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}`
+            ? `no período de ${(startDate ? startDate.toLocaleDateString('pt-BR') : '')} a ${(endDate ? endDate.toLocaleDateString('pt-BR') : '')}`
             : `para hoje (${new Date().toLocaleDateString('pt-BR')})`;
         const formattedResults = results.map(result => `Sala: ${result.sala}\n` +
             `Data: ${new Date(result.data).toLocaleString('pt-BR')}\n` +
@@ -424,7 +432,7 @@ server.registerTool("buscar_fotos", {
         return {
             content: [{
                     type: "text",
-                    text: `Erro ao buscar fotos de limpeza: ${error.message}`
+                    text: error instanceof Error ? `Erro ao buscar fotos de limpeza: ${error.message}` : 'Erro ao buscar fotos de limpeza: erro desconhecido'
                 }]
         };
     }
@@ -467,7 +475,7 @@ server.registerTool("exportar_registros", {
     // Função para validar e formatar data
     const parseAndValidateDate = (dateStr, fieldName) => {
         if (!dateStr)
-            return null;
+            throw new Error(`Data não informada para ${fieldName}`);
         // Verifica o formato da data
         if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
             throw new Error(`Formato de data inválido para ${fieldName}. Use DD/MM/YYYY`);
@@ -757,13 +765,18 @@ server.registerTool("exportar_registros", {
         }
     }
     catch (error) {
-        console.error('Erro ao exportar registros:', error);
-        return {
-            content: [{
-                    type: 'text',
-                    text: `Erro ao exportar registros: ${error.message}`
-                }]
-        };
+        if (error instanceof Error) {
+            console.error('Erro ao exportar registros:', error);
+            return {
+                content: [{ type: 'text', text: `Erro ao exportar registros: ${error.message}` }]
+            };
+        }
+        else {
+            console.error('Erro ao exportar registros:', error);
+            return {
+                content: [{ type: 'text', text: 'Erro ao exportar registros: erro desconhecido' }]
+            };
+        }
     }
 });
 // Handle shutdown gracefully

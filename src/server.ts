@@ -11,7 +11,10 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { z } from 'zod';
-import { storageService } from './services/storage.service';
+import { StorageService } from './services/storage.service.js';
+
+// Create storage service instance
+const storageService = new StorageService();
 
 // import "mcps-logger/console";
 
@@ -72,42 +75,40 @@ server.registerTool(
     try {
       const rooms = await db.collection("items").find(
         {},
-        { projection: { qrCode: 0 } } // Remove qrCode field
+        { projection: { qrCode: 0 } }
       ).toArray();
 
-      // Group rooms by category (using text between parentheses as category)
       const roomsByCategory: Record<string, string[]> = {};
-      
       rooms.forEach((room: any) => {
         const match = room.name.match(/(.*?)(?:\((.*?)\))?$/);
         const nameBase = (match?.[1] || room.name).trim();
         const category = match?.[2] || 'Outros';
-        
         if (!roomsByCategory[category]) {
           roomsByCategory[category] = [];
         }
         roomsByCategory[category].push(nameBase);
       });
 
-      // Create a summary string
       let output = `Total de salas: ${rooms.length}\n\n`;
-      
       for (const [category, names] of Object.entries(roomsByCategory)) {
-        const uniqueNames = [...new Set(names)]; // Remove duplicates
+        const uniqueNames = [...new Set(names)];
         output += `\n${category} (${uniqueNames.length}): ${uniqueNames.join(', ')}`;
       }
-      
       return {
         content: [{ type: "text", text: output }]
       };
     } catch (error) {
-      console.error('Error fetching rooms:', error);
-      return {
-        content: [{
-          type: "text",
-          text: `Erro ao buscar salas: ${error.message}`
-        }]
-      };
+      if (error instanceof Error) {
+        console.error('Error fetching rooms:', error);
+        return {
+          content: [{ type: "text", text: `Erro ao buscar salas: ${error.message}` }]
+        };
+      } else {
+        console.error('Error fetching rooms:', error);
+        return {
+          content: [{ type: "text", text: `Erro ao buscar salas: erro desconhecido` }]
+        };
+      }
     }
   }
 );
@@ -139,7 +140,7 @@ server.registerTool("resumo_geral",
         totalRooms++;
 
         // Check if item has any records today
-        const hasRecordToday = item.history.some(record => {
+        const hasRecordToday = item.history.some((record: any) => {
           const recordDate = new Date(record.date);
           return recordDate >= todayStart && recordDate <= todayEnd;
         });
@@ -293,23 +294,19 @@ server.registerTool(
       // Filter by date if provided
       if (data_inicio || data_fim) {
         // Parse dates from dd/MM/yyyy format
-        const parseDate = (dateStr: string) => {
-          if (!dateStr) return null;
+        const parseDate = (dateStr: string): Date | undefined => {
+          if (!dateStr) return undefined;
           const [day, month, year] = dateStr.split('/').map(Number);
           return new Date(year, month - 1, day);
         };
-
         const startDate = parseDate(data_inicio as string) || new Date(0);
         const endDate = parseDate(data_fim as string) || new Date();
-
         if (endDate) {
           endDate.setHours(23, 59, 59, 999);
         }
-
         history = history.filter(entry => {
           const entryDate = new Date(entry.date);
-          return (!startDate || entryDate >= startDate) &&
-            (!endDate || entryDate <= endDate);
+          return (!startDate || entryDate >= startDate) && (!endDate || entryDate <= endDate);
         });
       }
 
@@ -346,13 +343,17 @@ server.registerTool(
         ]
       };
     } catch (error) {
-      console.error('Error in registros_completos_por_sala:', error);
-      return {
-        content: [{
-          type: "text",
-          text: `Erro ao buscar registros: ${error.message}`
-        }]
-      };
+      if (error instanceof Error) {
+        console.error('Error in registros_completos_por_sala:', error);
+        return {
+          content: [{ type: "text", text: `Erro ao buscar registros: ${error.message}` }]
+        };
+      } else {
+        console.error('Error in registros_completos_por_sala:', error);
+        return {
+          content: [{ type: "text", text: `Erro ao buscar registros: erro desconhecido` }]
+        };
+      }
     }
   }
 );
@@ -418,10 +419,8 @@ server.registerTool(
       // Parse date range or default to today
       const startDate = data_inicio ? parseDate(data_inicio) : new Date();
       if (startDate) startDate.setHours(0, 0, 0, 0);
-      
       const endDate = data_fim ? parseDate(data_fim) : new Date();
       if (endDate) endDate.setHours(23, 59, 59, 999);
-      
       const filterByDate = Boolean(data_inicio || data_fim);
 
       // Process each valid result
@@ -473,9 +472,8 @@ server.registerTool(
 
       if (results.length === 0) {
         const dateRangeText = filterByDate 
-          ? `no período de ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}`
+          ? `no período de ${(startDate ? startDate.toLocaleDateString('pt-BR') : '')} a ${(endDate ? endDate.toLocaleDateString('pt-BR') : '')}`
           : `para hoje (${new Date().toLocaleDateString('pt-BR')})`;
-          
         return {
           content: [{
             type: "text",
@@ -486,7 +484,7 @@ server.registerTool(
 
       // Format the response
       const dateRangeText = filterByDate 
-        ? `no período de ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}`
+        ? `no período de ${(startDate ? startDate.toLocaleDateString('pt-BR') : '')} a ${(endDate ? endDate.toLocaleDateString('pt-BR') : '')}`
         : `para hoje (${new Date().toLocaleDateString('pt-BR')})`;
       
       const formattedResults = results.map(result => 
@@ -509,7 +507,7 @@ server.registerTool(
       return {
         content: [{
           type: "text",
-          text: `Erro ao buscar fotos de limpeza: ${error.message}`
+          text: error instanceof Error ? `Erro ao buscar fotos de limpeza: ${error.message}` : 'Erro ao buscar fotos de limpeza: erro desconhecido'
         }]
       };
     }
@@ -559,7 +557,7 @@ server.registerTool(
 
     // Função para validar e formatar data
     const parseAndValidateDate = (dateStr: string, fieldName: string): Date => {
-      if (!dateStr) return null;
+      if (!dateStr) throw new Error(`Data não informada para ${fieldName}`);
       
       // Verifica o formato da data
       if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
@@ -759,11 +757,11 @@ server.registerTool(
         for (const entry of item.history) {
           try {
             exportData.push({
-              'Local': item.name || 'Sem nome',
-              'Código': item.code || 'Sem código',
-              'Área': item.areaType === 'critica' ? 'Crítica' : 
-                     item.areaType === 'semicritica' ? 'Semicrítica' : 
-                     item.areaType === 'naocritica' ? 'Não Crítica' : 'Não Especificada',
+              'Local': (item as any).name || 'Sem nome',
+              'Código': (item as any).code || 'Sem código',
+              'Área': (item as any).areaType === 'critica' ? 'Crítica' : 
+                     (item as any).areaType === 'semicritica' ? 'Semicrítica' : 
+                     (item as any).areaType === 'naocritica' ? 'Não Crítica' : 'Não Especificada',
               'Data': entry.date ? new Date(entry.date).toLocaleString('pt-BR') : 'N/A',
               'Início': entry.startTime || 'N/A',
               'Fim': entry.endTime || 'N/A',
@@ -891,13 +889,17 @@ server.registerTool(
         }
       }
     } catch (error) {
-      console.error('Erro ao exportar registros:', error);
-      return {
-        content: [{
-          type: 'text',
-          text: `Erro ao exportar registros: ${error.message}`
-        }]
-      };
+      if (error instanceof Error) {
+        console.error('Erro ao exportar registros:', error);
+        return {
+          content: [{ type: 'text', text: `Erro ao exportar registros: ${error.message}` }]
+        };
+      } else {
+        console.error('Erro ao exportar registros:', error);
+        return {
+          content: [{ type: 'text', text: 'Erro ao exportar registros: erro desconhecido' }]
+        };
+      }
     }
   }
 );
