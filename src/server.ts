@@ -10,6 +10,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { z } from 'zod';
+import { storageService } from './services/storage.service';
+
+// import "mcps-logger/console";
 
 // Get directory name in ES module
 const __filename = fileURLToPath(import.meta.url);
@@ -20,9 +24,6 @@ const exportsDir = path.join(__dirname, '../exports');
 if (!fs.existsSync(exportsDir)) {
   fs.mkdirSync(exportsDir, { recursive: true });
 }
-
-// import "mcps-logger/console";
-import { z } from "zod";
 
 // Load environment variables
 dotenv.config();
@@ -733,18 +734,7 @@ server.registerTool(
         };
       }
 
-      // Cria um stream para escrita do arquivo Excel
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-        .replace('T', '_').split('Z')[0];
-      const fileName = `limpeza_export_${timestamp}.xlsx`;
-      const filePath = path.join(exportsDir, fileName);
-      
-      // Cria o diretório de exportação se não existir
-      if (!fs.existsSync(exportsDir)) {
-        fs.mkdirSync(exportsDir, { recursive: true });
-      }
-      
-      // Cria o workbook e worksheet
+      // Cria o workbook e worksheet em memória
       const workbook = XLSX.utils.book_new();
       const worksheet = XLSX.utils.json_to_sheet([]);
       
@@ -755,23 +745,12 @@ server.registerTool(
         'Concorrente', 'Terminal', 'Criado por', 'Observações'
       ];
       
-      // Adiciona os dados em lotes para evitar sobrecarga de memória
-      const BATCH_SIZE = 1000;
-      let batch = [];
-      let processedEntries = 0;
+      // Adiciona os cabeçalhos
+      XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
       
-      // Função para processar um lote de dados
-      const processBatch = (batchData) => {
-        XLSX.utils.sheet_add_json(worksheet, batchData, {
-          header: headers,
-          skipHeader: true,
-          origin: -1 // Adiciona após os dados existentes
-        });
-        
-        // Atualiza o arquivo em disco periodicamente
-        XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza', true);
-        XLSX.writeFile(workbook, filePath);
-      };
+      // Prepara os dados para exportação
+      const exportData = [];
+      let processedEntries = 0;
       
       // Processa cada item e seu histórico
       for (const item of items) {
@@ -779,7 +758,7 @@ server.registerTool(
         
         for (const entry of item.history) {
           try {
-            batch.push({
+            exportData.push({
               'Local': item.name || 'Sem nome',
               'Código': item.code || 'Sem código',
               'Área': item.areaType === 'critica' ? 'Crítica' : 
@@ -800,23 +779,19 @@ server.registerTool(
             
             processedEntries++;
             
-            // Processa o lote quando atinge o tamanho máximo
-            if (batch.length >= BATCH_SIZE) {
-              processBatch(batch);
-              batch = [];
+            // Verifica se atingiu o limite de registros
+            if (processedEntries > MAX_RECORDS) {
+              throw new Error(`Limite de ${MAX_RECORDS.toLocaleString('pt-BR')} registros excedido`);
             }
           } catch (err) {
             console.error('Erro ao processar entrada:', err);
+            throw err; // Propaga o erro para ser tratado externamente
           }
         }
       }
 
-      // Processa o último lote, se houver
-      if (batch.length > 0) {
-        processBatch(batch);
-      }
-      
-      if (processedEntries === 0) {
+      // Verifica se há dados para exportar
+      if (exportData.length === 0) {
         return {
           content: [{
             type: 'text',
@@ -825,10 +800,15 @@ server.registerTool(
         };
       }
       
-      // console.log(`Exportando ${processedEntries.toLocaleString('pt-BR')} registros para Excel`);
+      // Adiciona os dados à planilha
+      XLSX.utils.sheet_add_json(worksheet, exportData, {
+        header: headers,
+        skipHeader: true,
+        origin: 'A2' // Começa da segunda linha (após o cabeçalho)
+      });
       
       // Configura o tamanho das colunas
-      const columnWidths = [
+      worksheet['!cols'] = [
         { wch: 30 }, // Local
         { wch: 15 }, // Código
         { wch: 15 }, // Área
@@ -845,51 +825,71 @@ server.registerTool(
         { wch: 50 }  // Observações
       ];
       
-      // Aplica os tamanhos das colunas
-      worksheet['!cols'] = columnWidths;
+      // Adiciona a planilha ao workbook
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza');
       
-      // Adiciona os cabeçalhos
-      const headerRow = XLSX.utils.aoa_to_sheet([headers]);
-      XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
+      // Gera o arquivo Excel em memória
+      const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
       
-      // Salva o arquivo final
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza', true);
-      XLSX.writeFile(workbook, filePath);
+      // Gera um nome de arquivo único com timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+        .replace('T', '_').split('Z')[0];
+      const fileName = `limpeza_export_${timestamp}.xlsx`;
       
-      // console.log(`Arquivo exportado com sucesso: ${filePath}`);
-      
-      // Lê o arquivo como base64 para download
-      const fileData = fs.readFileSync(filePath, { encoding: 'base64' });
-      
-      // Agenda a limpeza do arquivo temporário após o download
-      setTimeout(() => {
+      try {
+        // Faz upload direto do buffer para o Google Cloud Storage
+        const downloadUrl = await storageService.uploadFile(
+          excelBuffer, 
+          fileName,
+          { contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+        );
+        
+        // Retorna o link para download
+        return {
+          content: [{
+            type: 'text',
+            text: `Exportação concluída: ${processedEntries} registros exportados.\n` +
+                  `Período: ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}\n\n` +
+                  'Clique no link abaixo para baixar o arquivo. O link expirará em 1 hora.'
+          }, {
+            type: 'text',
+            text: `[Baixar ${fileName}](${downloadUrl})`,
+            annotations: {
+              bold: true,
+              color: 'blue',
+              underline: true
+            }
+          }]
+        };
+      } catch (error) {
+        console.error('Erro ao fazer upload do arquivo para o Google Cloud Storage:', error);
+        
+        // Em caso de erro no upload, tenta gerar o arquivo em memória como fallback
         try {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-            // console.log(`Arquivo temporário removido: ${filePath}`);
-          }
-        } catch (error) {
-          console.error('Erro ao remover arquivo temporário:', error);
+          // Gera o arquivo Excel em memória
+          const fallbackBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+          const fileData = fallbackBuffer.toString('base64');
+          
+          return {
+            content: [{
+              type: 'text',
+              text: `Exportação concluída: ${processedEntries} registros exportados.\n` +
+                    `Período: ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}\n` +
+                    'O arquivo está disponível para download abaixo:'
+            }, {
+              type: 'resource',
+              resource: {
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                uri: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${fileData}`,
+                text: `Baixar ${fileName}`
+              }
+            }]
+          };
+        } catch (fallbackError) {
+          console.error('Erro ao gerar arquivo de fallback:', fallbackError);
+          throw new Error('Falha ao processar o arquivo de exportação');
         }
-      }, TEMP_FILE_EXPIRY);
-      
-      // Return file download information in MCP format
-      return {
-        content: [{
-          type: 'text',
-          text: `Exportação concluída: ${totalEntries} registros exportados.\n` +
-                `Período: ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}\n` +
-                `Arquivo: ${fileName}\n\n` +
-                'O arquivo está disponível para download abaixo:'
-        }, {
-          type: 'resource',
-          resource: {
-            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            uri: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${fileData}`,
-            text: `Baixar ${fileName}`
-          }
-        }]
-      };
+      }
     } catch (error) {
       console.error('Erro ao exportar registros:', error);
       return {

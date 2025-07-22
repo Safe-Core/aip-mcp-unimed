@@ -9,9 +9,9 @@
   "scripts": {
     "build": "tsc && node scripts/add-shebang.js",
     "start": "node dist/server.js",
-    "dev": "node --loader ts-node/esm src/server.ts",
+    "dev": "node --loader ts-node/esm --experimental-specifier-resolution=node src/server.ts",
     "inspect": "npx @modelcontextprotocol/inspector node dist/server.js",
-    "inspect:dev": "npx @modelcontextprotocol/inspector node --loader ts-node/esm src/server.ts",
+    "inspect:dev": "npx @modelcontextprotocol/inspector node --loader ts-node/esm --experimental-specifier-resolution=node src/server.ts",
     "logs": "npx mcps-logger",
     "test": "NODE_OPTIONS=\"--loader ts-node/esm\" nodemon src/test.ts"
   },
@@ -20,6 +20,7 @@
   "license": "ISC",
   "description": "Obter estatísticas resumidas sobre as limpezas de hoje.",
   "dependencies": {
+    "@google-cloud/storage": "^7.16.0",
     "@modelcontextprotocol/sdk": "^1.5.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
