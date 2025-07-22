@@ -1,12 +1,28 @@
 #!/usr/bin/env node
 
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
-import { startOfToday, endOfToday, previousDay } from 'date-fns';
-import { MongoClient } from 'mongodb';
 import dotenv from 'dotenv';
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { startOfToday, endOfToday, previousDay, startOfDay, endOfDay, subDays } from 'date-fns';
+import { MongoClient } from 'mongodb';
+import * as XLSX from 'xlsx';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+// Get directory name in ES module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Create exports directory if it doesn't exist
+const exportsDir = path.join(__dirname, '../exports');
+if (!fs.existsSync(exportsDir)) {
+  fs.mkdirSync(exportsDir, { recursive: true });
+}
+
 // import "mcps-logger/console";
+import { z } from "zod";
 
 // Load environment variables
 dotenv.config();
@@ -95,7 +111,7 @@ server.registerTool(
   }
 );
 
-// Summary statistics tool
+// Tool to fetch summary statistics
 server.registerTool("resumo_geral",
   {
     title: "Resumo das salas",
@@ -143,7 +159,7 @@ server.registerTool("resumo_geral",
   }
 );
 
-// Render a detailed table of room history
+// Utils to render a detailed table of room history
 function toHtmlTable(rows: any[]) {
   const headers = ['Sala', 'Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
 
@@ -366,7 +382,7 @@ server.registerTool(
       };
 
       // Use Atlas Search to find the best matching room name with fuzzy search
-      const searchResults = await db.collection("items").aggregate([
+      const searchResults = await db.collection('items').aggregate([
         {
           $search: {
             index: "default_1",
@@ -379,8 +395,8 @@ server.registerTool(
         },
         {
           $project: {
-            _id: 1,
-            name: 1,
+          _id: 1,
+          name: 1,
             history: 1,
             score: { $meta: "searchScore" },
           }
@@ -493,6 +509,255 @@ server.registerTool(
         content: [{
           type: "text",
           text: `Erro ao buscar fotos de limpeza: ${error.message}`
+        }]
+      };
+    }
+  }
+);
+
+// Tool to export cleaning records to Excel
+server.registerTool(
+  "exportar_registros",
+  {
+    title: "Exportar Registros de Limpeza",
+    description: "Exporta os registros de limpeza para um arquivo Excel",
+    inputSchema: {
+      sala: z.string().describe("Nome da sala (opcional, ex: SALA 28 (BANHEIRO))").optional(),
+      data_inicio: z.string().describe("Data de início no formato DD/MM/YYYY").optional(),
+      data_fim: z.string().describe("Data de fim no formato DD/MM/YYYY").optional(),
+      dias_anteriores: z.number().describe("Número de dias anteriores para exportar (opcional)").optional()
+    }
+  },
+  async ({ sala, data_inicio, data_fim, dias_anteriores }) => {
+    try {
+      // Parse date range
+      const parseDate = (dateStr: string): Date | null => {
+        if (!dateStr) return null;
+        const [day, month, year] = dateStr.split('/').map(Number);
+        return new Date(year, month - 1, day);
+      };
+
+      // Set up date range
+      let startDate: Date;
+      let endDate: Date = new Date();
+      
+      if (dias_anteriores) {
+        startDate = subDays(new Date(), dias_anteriores);
+      } else if (data_inicio) {
+        startDate = parseDate(data_inicio) || new Date(0);
+      } else {
+        startDate = subDays(new Date(), 7); // Default to last 7 days
+      }
+
+      if (data_fim) {
+        endDate = parseDate(data_fim) || new Date();
+      }
+
+      // Set time to start and end of day
+      startDate = startOfDay(startDate);
+      endDate = endOfDay(endDate);
+
+      console.log(`Exportando registros de ${startDate.toISOString()} a ${endDate.toISOString()}`);
+
+      // First, search for matching rooms using the same mechanism as buscar_fotos
+      let searchQuery = {};
+      if (sala) {
+        searchQuery = {
+          $search: {
+            index: "default_1",
+            text: {
+              query: sala,
+              path: "name"
+            },
+            scoreDetails: true
+          }
+        };
+      }
+
+      // Get matching items with their basic info first
+      const searchResults = await db.collection('items').aggregate([
+        ...(sala ? [searchQuery] : [{ $match: {} }]),
+        {
+          $project: {
+            _id: 1,
+            name: 1,
+            code: 1,
+            areaType: 1,
+            score: { $meta: "searchScore" }
+          }
+        },
+        { $limit: 100 } // Limit to 100 results to prevent performance issues
+      ]).toArray();
+
+      // Filter by minimum score if we did a text search
+      const MIN_SCORE = 0.7;
+      const validItems = sala 
+        ? searchResults.filter((item: any) => item.score >= MIN_SCORE)
+        : searchResults;
+
+      if (validItems.length === 0) {
+        throw new Error('Nenhuma sala encontrada com os critérios fornecidos');
+      }
+
+      // Get the item IDs for the second query
+      const itemIds = validItems.map((item: any) => item._id);
+
+      // Now fetch the full items with filtered history
+      const items = await db.collection('items')
+        .aggregate([
+          {
+            $match: {
+              _id: { $in: itemIds },
+              'history.date': { $gte: startDate, $lte: endDate }
+            }
+          },
+          {
+            $project: {
+              name: 1,
+              code: 1,
+              areaType: 1,
+              history: {
+                $filter: {
+                  input: '$history',
+                  as: 'h',
+                  cond: {
+                    $and: [
+                      { $gte: ['$$h.date', startDate] },
+                      { $lte: ['$$h.date', endDate] }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ])
+        .toArray();
+
+      if (!items || items.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: 'Nenhum registro encontrado para o período selecionado.'
+          }]
+        };
+      }
+
+      console.log(`Encontrados ${items.length} itens com histórico`);
+
+      // Prepare data for export
+      const exportData = [];
+      let totalEntries = 0;
+
+      // Process each item and its history
+      for (const item of items) {
+        if (!item.history || item.history.length === 0) continue;
+
+        // Sort history by date (newest first)
+        const sortedHistory = [...item.history].sort((a, b) => 
+          new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+
+        // Process each history entry
+        for (const entry of sortedHistory) {
+          try {
+            exportData.push({
+              'Local': item.name || 'Sem nome',
+              'Código': item.code || 'Sem código',
+              'Área': item.areaType === 'critica' ? 'Crítica' : 
+                     item.areaType === 'semicritica' ? 'Semicrítica' : 
+                     item.areaType === 'naocritica' ? 'Não Crítica' : 'Não Especificada',
+              'Data': entry.date ? new Date(entry.date).toLocaleString('pt-BR') : 'N/A',
+              'Início': entry.startTime || 'N/A',
+              'Fim': entry.endTime || 'N/A',
+              'Papel Toalha': entry.paperTowel ? 'Sim' : 'Não',
+              'Papel Higiênico': entry.toiletPaper ? 'Sim' : 'Não',
+              'Sabão': entry.soap ? 'Sim' : 'Não',
+              'Sanitizante': entry.handSanitizer ? 'Sim' : 'Não',
+              'Concorrente': entry.concurrent ? 'Sim' : 'Não',
+              'Terminal': entry.terminal ? 'Sim' : 'Não',
+              'Criado por': entry.createdBy || 'Desconhecido',
+              'Observações': entry.observations || ''
+            });
+            totalEntries++;
+          } catch (err) {
+            console.error('Error processing entry:', err);
+          }
+        }
+      }
+
+      if (exportData.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: 'Nenhum dado disponível para exportação após filtragem.'
+          }]
+        };
+      }
+
+      console.log(`Exportando ${totalEntries} registros para Excel`);
+
+      // Create worksheet
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
+      
+      // Auto-size columns
+      const columnWidths = [
+        { wch: 30 }, // Local
+        { wch: 15 }, // Código
+        { wch: 15 }, // Área
+        { wch: 20 }, // Data
+        { wch: 10 }, // Início
+        { wch: 10 }, // Fim
+        { wch: 12 }, // Papel Toalha
+        { wch: 15 }, // Papel Higiênico
+        { wch: 10 }, // Sabão
+        { wch: 15 }, // Sanitizante
+        { wch: 12 }, // Concorrente
+        { wch: 10 }, // Terminal
+        { wch: 25 }, // Criado por
+        { wch: 50 }  // Observações
+      ];
+      worksheet['!cols'] = columnWidths;
+
+      // Create workbook
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza');
+
+      // Generate file name with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `limpeza_export_${timestamp}.xlsx`;
+      const filePath = path.join(exportsDir, fileName);
+
+      // Write to file
+      XLSX.writeFile(workbook, filePath);
+
+      console.log(`Arquivo exportado com sucesso: ${filePath}`);
+
+      // Read the file as base64
+      const fileData = fs.readFileSync(filePath, { encoding: 'base64' });
+      
+      // Return file download information in MCP format
+      return {
+        content: [{
+          type: 'text',
+          text: `Exportação concluída: ${totalEntries} registros exportados.\n` +
+                `Período: ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}\n` +
+                `Arquivo: ${fileName}\n\n` +
+                'O arquivo está disponível para download abaixo:'
+        }, {
+          type: 'resource',
+          resource: {
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            uri: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${fileData}`,
+            text: `Baixar ${fileName}`
+          }
+        }]
+      };
+    } catch (error) {
+      console.error('Erro ao exportar registros:', error);
+      return {
+        content: [{
+          type: 'text',
+          text: `Erro ao exportar registros: ${error.message}`
         }]
       };
     }
