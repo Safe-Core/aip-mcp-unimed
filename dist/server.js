@@ -1,11 +1,24 @@
 #!/usr/bin/env node
+import dotenv from 'dotenv';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
-import { startOfToday, endOfToday, previousDay } from 'date-fns';
+import { startOfToday, endOfToday, previousDay, startOfDay, endOfDay, subDays, differenceInDays } from 'date-fns';
 import { MongoClient } from 'mongodb';
-import dotenv from 'dotenv';
+import * as XLSX from 'xlsx';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+// Get directory name in ES module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// Create exports directory if it doesn't exist
+const exportsDir = path.join(__dirname, '../exports');
+if (!fs.existsSync(exportsDir)) {
+    fs.mkdirSync(exportsDir, { recursive: true });
+}
 // import "mcps-logger/console";
+import { z } from "zod";
 // Load environment variables
 dotenv.config();
 // MongoDB connection
@@ -75,7 +88,7 @@ server.registerTool("listar_salas", {
         };
     }
 });
-// Summary statistics tool
+// Tool to fetch summary statistics
 server.registerTool("resumo_geral", {
     title: "Resumo das salas",
     description: "Obter estatísticas resumidas sobre as limpezas de hoje",
@@ -112,7 +125,7 @@ server.registerTool("resumo_geral", {
         return { content: [{ type: "text", text: 'Erro ao gerar resumo do dia' }] };
     }
 });
-// Render a detailed table of room history
+// Utils to render a detailed table of room history
 function toHtmlTable(rows) {
     const headers = ['Sala', 'Tempo', 'Suprimentos', 'Observações', 'Data', 'Criado por'];
     const head = `
@@ -301,7 +314,7 @@ server.registerTool("buscar_fotos", {
             return new Date(year, month - 1, day);
         };
         // Use Atlas Search to find the best matching room name with fuzzy search
-        const searchResults = await db.collection("items").aggregate([
+        const searchResults = await db.collection('items').aggregate([
             {
                 $search: {
                     index: "default_1",
@@ -411,6 +424,343 @@ server.registerTool("buscar_fotos", {
             content: [{
                     type: "text",
                     text: `Erro ao buscar fotos de limpeza: ${error.message}`
+                }]
+        };
+    }
+});
+// Tool to export cleaning records to Excel
+server.registerTool("exportar_registros", {
+    title: "Exportar Registros de Limpeza",
+    description: "Exporta os registros de limpeza para um arquivo Excel",
+    inputSchema: {
+        sala: z.string().describe("Nome da sala (opcional, ex: SALA 28 (BANHEIRO))").optional(),
+        data_inicio: z.string().describe("Data de início no formato DD/MM/YYYY").optional(),
+        data_fim: z.string().describe("Data de fim no formato DD/MM/YYYY").optional(),
+        dias_anteriores: z.number().int().describe("Número de dias anteriores para exportar (opcional, máximo 90 dias)").max(90).optional()
+    }
+}, async ({ sala, data_inicio, data_fim, dias_anteriores }) => {
+    // Configurações
+    const MAX_RECORDS = 50000; // Limite máximo de registros
+    const MAX_DAYS = 90; // Limite máximo de dias para exportação
+    const TEMP_FILE_EXPIRY = 5 * 60 * 1000; // 5 minutos para expiração do arquivo temporário
+    // Função para limpar arquivos temporários antigos
+    const cleanOldTempFiles = () => {
+        try {
+            const now = Date.now();
+            const files = fs.readdirSync(exportsDir);
+            files.forEach(file => {
+                if (file.startsWith('limpeza_export_') && file.endsWith('.xlsx')) {
+                    const filePath = path.join(exportsDir, file);
+                    const stats = fs.statSync(filePath);
+                    // Se o arquivo for mais antigo que TEMP_FILE_EXPIRY, deleta
+                    if (now - stats.mtimeMs > TEMP_FILE_EXPIRY) {
+                        fs.unlinkSync(filePath);
+                    }
+                }
+            });
+        }
+        catch (error) {
+            console.error('Erro ao limpar arquivos temporários:', error);
+        }
+    };
+    // Função para validar e formatar data
+    const parseAndValidateDate = (dateStr, fieldName) => {
+        if (!dateStr)
+            return null;
+        // Verifica o formato da data
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+            throw new Error(`Formato de data inválido para ${fieldName}. Use DD/MM/YYYY`);
+        }
+        const [day, month, year] = dateStr.split('/').map(Number);
+        const date = new Date(year, month - 1, day);
+        // Verifica se a data é válida
+        if (isNaN(date.getTime())) {
+            throw new Error(`Data inválida para ${fieldName}: ${dateStr}`);
+        }
+        return date;
+    };
+    try {
+        // Limpa arquivos temporários antigos
+        cleanOldTempFiles();
+        // Valida e configura o intervalo de datas
+        let startDate;
+        let endDate = endOfDay(new Date());
+        if (dias_anteriores) {
+            startDate = startOfDay(subDays(new Date(), dias_anteriores));
+        }
+        else if (data_inicio) {
+            startDate = startOfDay(parseAndValidateDate(data_inicio, 'data_inicio') || new Date(0));
+        }
+        else {
+            startDate = startOfDay(subDays(new Date(), 7)); // Padrão: últimos 7 dias
+        }
+        if (data_fim) {
+            endDate = endOfDay(parseAndValidateDate(data_fim, 'data_fim') || new Date());
+        }
+        // Valida o intervalo de datas
+        if (startDate > endDate) {
+            throw new Error('A data de início não pode ser posterior à data de fim');
+        }
+        // Valida o período máximo de exportação
+        const daysDifference = differenceInDays(endDate, startDate);
+        if (daysDifference > MAX_DAYS) {
+            throw new Error(`O período máximo permitido é de ${MAX_DAYS} dias`);
+        }
+        // Set time to start and end of day
+        startDate = startOfDay(startDate);
+        endDate = endOfDay(endDate);
+        // console.log(`Exportando registros de ${startDate.toISOString()} a ${endDate.toISOString()}`);
+        // First, search for matching rooms using the same mechanism as buscar_fotos
+        let searchQuery = {};
+        if (sala) {
+            searchQuery = {
+                $search: {
+                    index: "default_1",
+                    text: {
+                        query: sala,
+                        path: "name"
+                    },
+                    scoreDetails: true
+                }
+            };
+        }
+        // Get matching items with their basic info first
+        const searchResults = await db.collection('items').aggregate([
+            ...(sala ? [searchQuery] : [{ $match: {} }]),
+            {
+                $project: {
+                    _id: 1,
+                    name: 1,
+                    code: 1,
+                    areaType: 1,
+                    score: { $meta: "searchScore" }
+                }
+            },
+            { $limit: 100 } // Limit to 100 results to prevent performance issues
+        ]).toArray();
+        // Filter by minimum score if we did a text search
+        const MIN_SCORE = 0.7;
+        const validItems = sala
+            ? searchResults.filter((item) => item.score >= MIN_SCORE)
+            : searchResults;
+        if (validItems.length === 0) {
+            throw new Error('Nenhuma sala encontrada com os critérios fornecidos');
+        }
+        // Get the item IDs for the second query
+        const itemIds = validItems.map((item) => item._id);
+        // Usando cursor para processar os itens em lotes
+        const itemsCursor = db.collection('items').aggregate([
+            {
+                $match: {
+                    _id: { $in: itemIds },
+                    'history.date': { $gte: startDate, $lte: endDate }
+                }
+            },
+            {
+                $project: {
+                    name: 1,
+                    code: 1,
+                    areaType: 1,
+                    history: {
+                        $filter: {
+                            input: '$history',
+                            as: 'h',
+                            cond: {
+                                $and: [
+                                    { $gte: ['$$h.date', startDate] },
+                                    { $lte: ['$$h.date', endDate] }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        ], { allowDiskUse: true, batchSize: 100 });
+        // Processa os itens em lotes
+        const items = [];
+        let totalEntries = 0;
+        let shouldContinue = true;
+        while (await itemsCursor.hasNext() && shouldContinue) {
+            const item = await itemsCursor.next();
+            if (!item || !item.history || item.history.length === 0)
+                continue;
+            // Ordena o histórico por data (mais recente primeiro)
+            const sortedHistory = [...item.history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            items.push({
+                ...item,
+                history: sortedHistory
+            });
+            // Verifica se atingiu o limite de registros
+            totalEntries += sortedHistory.length;
+            if (totalEntries > MAX_RECORDS) {
+                shouldContinue = false;
+                break;
+            }
+        }
+        if (!items || items.length === 0) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: 'Nenhum registro encontrado para o período selecionado.'
+                    }]
+            };
+        }
+        // console.log(`Encontrados ${items.length} itens com histórico`);
+        // Verifica se atingiu o limite de registros
+        if (totalEntries > MAX_RECORDS) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: `Limite de ${MAX_RECORDS.toLocaleString('pt-BR')} registros excedido. Por favor, reduza o intervalo de datas.`
+                    }]
+            };
+        }
+        // Cria um stream para escrita do arquivo Excel
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+            .replace('T', '_').split('Z')[0];
+        const fileName = `limpeza_export_${timestamp}.xlsx`;
+        const filePath = path.join(exportsDir, fileName);
+        // Cria o diretório de exportação se não existir
+        if (!fs.existsSync(exportsDir)) {
+            fs.mkdirSync(exportsDir, { recursive: true });
+        }
+        // Cria o workbook e worksheet
+        const workbook = XLSX.utils.book_new();
+        const worksheet = XLSX.utils.json_to_sheet([]);
+        // Adiciona cabeçalhos
+        const headers = [
+            'Local', 'Código', 'Área', 'Data', 'Início', 'Fim',
+            'Papel Toalha', 'Papel Higiênico', 'Sabão', 'Sanitizante',
+            'Concorrente', 'Terminal', 'Criado por', 'Observações'
+        ];
+        // Adiciona os dados em lotes para evitar sobrecarga de memória
+        const BATCH_SIZE = 1000;
+        let batch = [];
+        let processedEntries = 0;
+        // Função para processar um lote de dados
+        const processBatch = (batchData) => {
+            XLSX.utils.sheet_add_json(worksheet, batchData, {
+                header: headers,
+                skipHeader: true,
+                origin: -1 // Adiciona após os dados existentes
+            });
+            // Atualiza o arquivo em disco periodicamente
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza', true);
+            XLSX.writeFile(workbook, filePath);
+        };
+        // Processa cada item e seu histórico
+        for (const item of items) {
+            if (!item.history || item.history.length === 0)
+                continue;
+            for (const entry of item.history) {
+                try {
+                    batch.push({
+                        'Local': item.name || 'Sem nome',
+                        'Código': item.code || 'Sem código',
+                        'Área': item.areaType === 'critica' ? 'Crítica' :
+                            item.areaType === 'semicritica' ? 'Semicrítica' :
+                                item.areaType === 'naocritica' ? 'Não Crítica' : 'Não Especificada',
+                        'Data': entry.date ? new Date(entry.date).toLocaleString('pt-BR') : 'N/A',
+                        'Início': entry.startTime || 'N/A',
+                        'Fim': entry.endTime || 'N/A',
+                        'Papel Toalha': entry.paperTowel ? 'Sim' : 'Não',
+                        'Papel Higiênico': entry.toiletPaper ? 'Sim' : 'Não',
+                        'Sabão': entry.soap ? 'Sim' : 'Não',
+                        'Sanitizante': entry.handSanitizer ? 'Sim' : 'Não',
+                        'Concorrente': entry.concurrent ? 'Sim' : 'Não',
+                        'Terminal': entry.terminal ? 'Sim' : 'Não',
+                        'Criado por': entry.createdBy || 'Desconhecido',
+                        'Observações': entry.observations || ''
+                    });
+                    processedEntries++;
+                    // Processa o lote quando atinge o tamanho máximo
+                    if (batch.length >= BATCH_SIZE) {
+                        processBatch(batch);
+                        batch = [];
+                    }
+                }
+                catch (err) {
+                    console.error('Erro ao processar entrada:', err);
+                }
+            }
+        }
+        // Processa o último lote, se houver
+        if (batch.length > 0) {
+            processBatch(batch);
+        }
+        if (processedEntries === 0) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: 'Nenhum dado disponível para exportação após filtragem.'
+                    }]
+            };
+        }
+        // console.log(`Exportando ${processedEntries.toLocaleString('pt-BR')} registros para Excel`);
+        // Configura o tamanho das colunas
+        const columnWidths = [
+            { wch: 30 }, // Local
+            { wch: 15 }, // Código
+            { wch: 15 }, // Área
+            { wch: 20 }, // Data
+            { wch: 10 }, // Início
+            { wch: 10 }, // Fim
+            { wch: 12 }, // Papel Toalha
+            { wch: 15 }, // Papel Higiênico
+            { wch: 10 }, // Sabão
+            { wch: 15 }, // Sanitizante
+            { wch: 12 }, // Concorrente
+            { wch: 10 }, // Terminal
+            { wch: 25 }, // Criado por
+            { wch: 50 } // Observações
+        ];
+        // Aplica os tamanhos das colunas
+        worksheet['!cols'] = columnWidths;
+        // Adiciona os cabeçalhos
+        const headerRow = XLSX.utils.aoa_to_sheet([headers]);
+        XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
+        // Salva o arquivo final
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza', true);
+        XLSX.writeFile(workbook, filePath);
+        // console.log(`Arquivo exportado com sucesso: ${filePath}`);
+        // Lê o arquivo como base64 para download
+        const fileData = fs.readFileSync(filePath, { encoding: 'base64' });
+        // Agenda a limpeza do arquivo temporário após o download
+        setTimeout(() => {
+            try {
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                    // console.log(`Arquivo temporário removido: ${filePath}`);
+                }
+            }
+            catch (error) {
+                console.error('Erro ao remover arquivo temporário:', error);
+            }
+        }, TEMP_FILE_EXPIRY);
+        // Return file download information in MCP format
+        return {
+            content: [{
+                    type: 'text',
+                    text: `Exportação concluída: ${totalEntries} registros exportados.\n` +
+                        `Período: ${startDate.toLocaleDateString('pt-BR')} a ${endDate.toLocaleDateString('pt-BR')}\n` +
+                        `Arquivo: ${fileName}\n\n` +
+                        'O arquivo está disponível para download abaixo:'
+                }, {
+                    type: 'resource',
+                    resource: {
+                        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        uri: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${fileData}`,
+                        text: `Baixar ${fileName}`
+                    }
+                }]
+        };
+    }
+    catch (error) {
+        console.error('Erro ao exportar registros:', error);
+        return {
+            content: [{
+                    type: 'text',
+                    text: `Erro ao exportar registros: ${error.message}`
                 }]
         };
     }

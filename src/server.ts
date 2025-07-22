@@ -3,7 +3,7 @@
 import dotenv from 'dotenv';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { startOfToday, endOfToday, previousDay, startOfDay, endOfDay, subDays } from 'date-fns';
+import { startOfToday, endOfToday, previousDay, startOfDay, endOfDay, subDays, differenceInDays } from 'date-fns';
 import { MongoClient } from 'mongodb';
 import * as XLSX from 'xlsx';
 import * as fs from 'fs';
@@ -525,39 +525,93 @@ server.registerTool(
       sala: z.string().describe("Nome da sala (opcional, ex: SALA 28 (BANHEIRO))").optional(),
       data_inicio: z.string().describe("Data de início no formato DD/MM/YYYY").optional(),
       data_fim: z.string().describe("Data de fim no formato DD/MM/YYYY").optional(),
-      dias_anteriores: z.number().describe("Número de dias anteriores para exportar (opcional)").optional()
+      dias_anteriores: z.number().int().describe("Número de dias anteriores para exportar (opcional, máximo 90 dias)").max(90).optional()
     }
   },
   async ({ sala, data_inicio, data_fim, dias_anteriores }) => {
-    try {
-      // Parse date range
-      const parseDate = (dateStr: string): Date | null => {
-        if (!dateStr) return null;
-        const [day, month, year] = dateStr.split('/').map(Number);
-        return new Date(year, month - 1, day);
-      };
+    // Configurações
+    const MAX_RECORDS = 50000; // Limite máximo de registros
+    const MAX_DAYS = 90; // Limite máximo de dias para exportação
+    const TEMP_FILE_EXPIRY = 5 * 60 * 1000; // 5 minutos para expiração do arquivo temporário
+    
+    // Função para limpar arquivos temporários antigos
+    const cleanOldTempFiles = () => {
+      try {
+        const now = Date.now();
+        const files = fs.readdirSync(exportsDir);
+        
+        files.forEach(file => {
+          if (file.startsWith('limpeza_export_') && file.endsWith('.xlsx')) {
+            const filePath = path.join(exportsDir, file);
+            const stats = fs.statSync(filePath);
+            
+            // Se o arquivo for mais antigo que TEMP_FILE_EXPIRY, deleta
+            if (now - stats.mtimeMs > TEMP_FILE_EXPIRY) {
+              fs.unlinkSync(filePath);
+            }
+          }
+        });
+      } catch (error) {
+        console.error('Erro ao limpar arquivos temporários:', error);
+      }
+    };
 
-      // Set up date range
+    // Função para validar e formatar data
+    const parseAndValidateDate = (dateStr: string, fieldName: string): Date => {
+      if (!dateStr) return null;
+      
+      // Verifica o formato da data
+      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+        throw new Error(`Formato de data inválido para ${fieldName}. Use DD/MM/YYYY`);
+      }
+      
+      const [day, month, year] = dateStr.split('/').map(Number);
+      const date = new Date(year, month - 1, day);
+      
+      // Verifica se a data é válida
+      if (isNaN(date.getTime())) {
+        throw new Error(`Data inválida para ${fieldName}: ${dateStr}`);
+      }
+      
+      return date;
+    };
+
+    try {
+      // Limpa arquivos temporários antigos
+      cleanOldTempFiles();
+      
+      // Valida e configura o intervalo de datas
       let startDate: Date;
-      let endDate: Date = new Date();
+      let endDate: Date = endOfDay(new Date());
       
       if (dias_anteriores) {
-        startDate = subDays(new Date(), dias_anteriores);
+        startDate = startOfDay(subDays(new Date(), dias_anteriores));
       } else if (data_inicio) {
-        startDate = parseDate(data_inicio) || new Date(0);
+        startDate = startOfDay(parseAndValidateDate(data_inicio, 'data_inicio') || new Date(0));
       } else {
-        startDate = subDays(new Date(), 7); // Default to last 7 days
+        startDate = startOfDay(subDays(new Date(), 7)); // Padrão: últimos 7 dias
       }
 
       if (data_fim) {
-        endDate = parseDate(data_fim) || new Date();
+        endDate = endOfDay(parseAndValidateDate(data_fim, 'data_fim') || new Date());
+      }
+      
+      // Valida o intervalo de datas
+      if (startDate > endDate) {
+        throw new Error('A data de início não pode ser posterior à data de fim');
+      }
+      
+      // Valida o período máximo de exportação
+      const daysDifference = differenceInDays(endDate, startDate);
+      if (daysDifference > MAX_DAYS) {
+        throw new Error(`O período máximo permitido é de ${MAX_DAYS} dias`);
       }
 
       // Set time to start and end of day
       startDate = startOfDay(startDate);
       endDate = endOfDay(endDate);
 
-      console.log(`Exportando registros de ${startDate.toISOString()} a ${endDate.toISOString()}`);
+      // console.log(`Exportando registros de ${startDate.toISOString()} a ${endDate.toISOString()}`);
 
       // First, search for matching rooms using the same mechanism as buscar_fotos
       let searchQuery = {};
@@ -602,36 +656,61 @@ server.registerTool(
       // Get the item IDs for the second query
       const itemIds = validItems.map((item: any) => item._id);
 
-      // Now fetch the full items with filtered history
-      const items = await db.collection('items')
-        .aggregate([
-          {
-            $match: {
-              _id: { $in: itemIds },
-              'history.date': { $gte: startDate, $lte: endDate }
-            }
-          },
-          {
-            $project: {
-              name: 1,
-              code: 1,
-              areaType: 1,
-              history: {
-                $filter: {
-                  input: '$history',
-                  as: 'h',
-                  cond: {
-                    $and: [
-                      { $gte: ['$$h.date', startDate] },
-                      { $lte: ['$$h.date', endDate] }
-                    ]
-                  }
+      // Usando cursor para processar os itens em lotes
+      const itemsCursor = db.collection('items').aggregate([
+        {
+          $match: {
+            _id: { $in: itemIds },
+            'history.date': { $gte: startDate, $lte: endDate }
+          }
+        },
+        {
+          $project: {
+            name: 1,
+            code: 1,
+            areaType: 1,
+            history: {
+              $filter: {
+                input: '$history',
+                as: 'h',
+                cond: {
+                  $and: [
+                    { $gte: ['$$h.date', startDate] },
+                    { $lte: ['$$h.date', endDate] }
+                  ]
                 }
               }
             }
           }
-        ])
-        .toArray();
+        }
+      ], { allowDiskUse: true, batchSize: 100 });
+      
+      // Processa os itens em lotes
+      const items = [];
+      let totalEntries = 0;
+      let shouldContinue = true;
+      
+      while (await itemsCursor.hasNext() && shouldContinue) {
+        const item = await itemsCursor.next();
+        if (!item || !item.history || item.history.length === 0) continue;
+        
+        // Ordena o histórico por data (mais recente primeiro)
+        const sortedHistory = [...item.history].sort((a, b) => 
+          new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+        
+        items.push({
+          ...item,
+          history: sortedHistory
+        });
+        
+        // Verifica se atingiu o limite de registros
+        totalEntries += sortedHistory.length;
+        if (totalEntries > MAX_RECORDS) {
+          shouldContinue = false;
+          break;
+        }
+      }
 
       if (!items || items.length === 0) {
         return {
@@ -642,25 +721,65 @@ server.registerTool(
         };
       }
 
-      console.log(`Encontrados ${items.length} itens com histórico`);
+      // console.log(`Encontrados ${items.length} itens com histórico`);
 
-      // Prepare data for export
-      const exportData = [];
-      let totalEntries = 0;
+      // Verifica se atingiu o limite de registros
+      if (totalEntries > MAX_RECORDS) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Limite de ${MAX_RECORDS.toLocaleString('pt-BR')} registros excedido. Por favor, reduza o intervalo de datas.`
+          }]
+        };
+      }
 
-      // Process each item and its history
+      // Cria um stream para escrita do arquivo Excel
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+        .replace('T', '_').split('Z')[0];
+      const fileName = `limpeza_export_${timestamp}.xlsx`;
+      const filePath = path.join(exportsDir, fileName);
+      
+      // Cria o diretório de exportação se não existir
+      if (!fs.existsSync(exportsDir)) {
+        fs.mkdirSync(exportsDir, { recursive: true });
+      }
+      
+      // Cria o workbook e worksheet
+      const workbook = XLSX.utils.book_new();
+      const worksheet = XLSX.utils.json_to_sheet([]);
+      
+      // Adiciona cabeçalhos
+      const headers = [
+        'Local', 'Código', 'Área', 'Data', 'Início', 'Fim',
+        'Papel Toalha', 'Papel Higiênico', 'Sabão', 'Sanitizante',
+        'Concorrente', 'Terminal', 'Criado por', 'Observações'
+      ];
+      
+      // Adiciona os dados em lotes para evitar sobrecarga de memória
+      const BATCH_SIZE = 1000;
+      let batch = [];
+      let processedEntries = 0;
+      
+      // Função para processar um lote de dados
+      const processBatch = (batchData) => {
+        XLSX.utils.sheet_add_json(worksheet, batchData, {
+          header: headers,
+          skipHeader: true,
+          origin: -1 // Adiciona após os dados existentes
+        });
+        
+        // Atualiza o arquivo em disco periodicamente
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza', true);
+        XLSX.writeFile(workbook, filePath);
+      };
+      
+      // Processa cada item e seu histórico
       for (const item of items) {
         if (!item.history || item.history.length === 0) continue;
-
-        // Sort history by date (newest first)
-        const sortedHistory = [...item.history].sort((a, b) => 
-          new Date(b.date).getTime() - new Date(a.date).getTime()
-        );
-
-        // Process each history entry
-        for (const entry of sortedHistory) {
+        
+        for (const entry of item.history) {
           try {
-            exportData.push({
+            batch.push({
               'Local': item.name || 'Sem nome',
               'Código': item.code || 'Sem código',
               'Área': item.areaType === 'critica' ? 'Crítica' : 
@@ -678,14 +797,26 @@ server.registerTool(
               'Criado por': entry.createdBy || 'Desconhecido',
               'Observações': entry.observations || ''
             });
-            totalEntries++;
+            
+            processedEntries++;
+            
+            // Processa o lote quando atinge o tamanho máximo
+            if (batch.length >= BATCH_SIZE) {
+              processBatch(batch);
+              batch = [];
+            }
           } catch (err) {
-            console.error('Error processing entry:', err);
+            console.error('Erro ao processar entrada:', err);
           }
         }
       }
 
-      if (exportData.length === 0) {
+      // Processa o último lote, se houver
+      if (batch.length > 0) {
+        processBatch(batch);
+      }
+      
+      if (processedEntries === 0) {
         return {
           content: [{
             type: 'text',
@@ -693,13 +824,10 @@ server.registerTool(
           }]
         };
       }
-
-      console.log(`Exportando ${totalEntries} registros para Excel`);
-
-      // Create worksheet
-      const worksheet = XLSX.utils.json_to_sheet(exportData);
       
-      // Auto-size columns
+      // console.log(`Exportando ${processedEntries.toLocaleString('pt-BR')} registros para Excel`);
+      
+      // Configura o tamanho das colunas
       const columnWidths = [
         { wch: 30 }, // Local
         { wch: 15 }, // Código
@@ -716,24 +844,34 @@ server.registerTool(
         { wch: 25 }, // Criado por
         { wch: 50 }  // Observações
       ];
+      
+      // Aplica os tamanhos das colunas
       worksheet['!cols'] = columnWidths;
-
-      // Create workbook
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza');
-
-      // Generate file name with timestamp
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const fileName = `limpeza_export_${timestamp}.xlsx`;
-      const filePath = path.join(exportsDir, fileName);
-
-      // Write to file
+      
+      // Adiciona os cabeçalhos
+      const headerRow = XLSX.utils.aoa_to_sheet([headers]);
+      XLSX.utils.sheet_add_aoa(worksheet, [headers], { origin: 'A1' });
+      
+      // Salva o arquivo final
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Histórico de Limpeza', true);
       XLSX.writeFile(workbook, filePath);
-
-      console.log(`Arquivo exportado com sucesso: ${filePath}`);
-
-      // Read the file as base64
+      
+      // console.log(`Arquivo exportado com sucesso: ${filePath}`);
+      
+      // Lê o arquivo como base64 para download
       const fileData = fs.readFileSync(filePath, { encoding: 'base64' });
+      
+      // Agenda a limpeza do arquivo temporário após o download
+      setTimeout(() => {
+        try {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            // console.log(`Arquivo temporário removido: ${filePath}`);
+          }
+        } catch (error) {
+          console.error('Erro ao remover arquivo temporário:', error);
+        }
+      }, TEMP_FILE_EXPIRY);
       
       // Return file download information in MCP format
       return {
